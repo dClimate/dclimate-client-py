@@ -60,7 +60,7 @@ def random_zarr_dataset():
     )
 
     # Generate Random Key
-    encryption_key = get_random_bytes(32).hex()
+    encryption_key = get_random_bytes(32)
     # Set the encryption key for the class
     EncryptionCodec.set_encryption_key(encryption_key)
     # Register the codec
@@ -87,15 +87,9 @@ def test_bad_encryption_keys():
     # Assert failure Encryption key must be set before using EncryptionCodec
     with pytest.raises(ValueError):
         EncryptionCodec(header="dClimate-Zarr")
-    # Assert failure Encryption key must be a string
-    with pytest.raises(ValueError):
-        EncryptionCodec.set_encryption_key(123)
-    # Assert failure Encryption key must be a hexadecimal string
-    with pytest.raises(ValueError):
-        EncryptionCodec.set_encryption_key("123Z")
     # Assert failure Encryption key must be 32 bytes (64 hex characters)
     with pytest.raises(ValueError):
-        EncryptionCodec.set_encryption_key("1234567890")
+        EncryptionCodec.set_encryption_key(get_random_bytes(31))
 
 
 def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
@@ -140,7 +134,7 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     )
 
     # Create new encryption filter but with a different encryption key
-    encryption_key = get_random_bytes(32).hex()
+    encryption_key = get_random_bytes(32)
     EncryptionCodec.set_encryption_key(encryption_key)
     register_codec(EncryptionCodec(header="dClimate-Zarr"))
 

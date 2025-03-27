@@ -15,15 +15,11 @@ class EncryptionCodec(Codec):
             raise ValueError("Encryption key must be set before using EncryptionCodec.")
 
     @classmethod
-    def set_encryption_key(cls, encryption_key: str):
+    def set_encryption_key(cls, encryption_key: bytes):
         """Set the encryption key dynamically (once per runtime)."""
-        if not isinstance(encryption_key, str):
-            raise ValueError("Encryption key must be a string")
-        if not all(c in "0123456789abcdefABCDEF" for c in encryption_key):
-            raise ValueError("Encryption key must be a hexadecimal string")
-        if len(encryption_key) != 64:  # 32 bytes = 64 hex chars
-            raise ValueError("Encryption key must be 32 bytes (64 hex characters)")
-        cls._encryption_key = bytes.fromhex(encryption_key)
+        if len(encryption_key) != 32:  # 32 bytes = 64 hex chars
+            raise ValueError("Encryption key must be 32 bytes")
+        cls._encryption_key = encryption_key
 
     def encode(self, buf):
         raw = io.BytesIO()
