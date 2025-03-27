@@ -5,7 +5,7 @@ import os
 import requests
 import json
 import xarray as xr
-from py_hamt import HAMT, IPFSStore
+from py_hamt import HAMT, IPFSStore, IPFSZarr3
 
 from .dclimate_zarr_errors import DatasetNotFoundError, NoMetadataFoundError
 
@@ -199,7 +199,10 @@ def get_dataset_by_ipns_hash(
     hamt_store = HAMT(
         store=IPFSStore(**store_kwargs), root_node_id=ipns_name_hash, read_only=True
     )
-    return xr.open_zarr(store=hamt_store, chunks=None)
+
+    # Load the HAMT as a IPFSZarr3
+    ipfszarr3_store = IPFSZarr3(hamt_store, read_only=True)
+    return xr.open_zarr(store=ipfszarr3_store, chunks=None)
 
 
 def get_metadata_by_key(key: str) -> dict:

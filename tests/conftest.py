@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import xarray as xr
 import zarr
+import zarr.storage
 
 HERE = pathlib.Path(__file__).parent
 ETC = HERE / "etc"
@@ -15,13 +16,15 @@ SAMPLE_ZARRS = ETC / "sample_zarrs"
 
 @pytest.fixture
 def input_ds():
-    with zarr.ZipStore(ETC / "retrieval_test.zip", mode="r") as in_zarr:
+    with zarr.storage.ZipStore(ETC / "retrieval_test.zip", mode="r") as in_zarr:
         return xr.open_zarr(in_zarr, chunks=None).compute()
 
 
 @pytest.fixture
 def forecast_ds():
-    with zarr.ZipStore(ETC / "forecast_retrieval_test.zip", mode="r") as in_zarr:
+    with zarr.storage.ZipStore(
+        ETC / "forecast_retrieval_test.zip", mode="r"
+    ) as in_zarr:
         return xr.open_zarr(in_zarr, chunks=None).compute()
 
 

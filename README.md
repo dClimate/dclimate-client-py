@@ -77,9 +77,9 @@ ds = xr.open_dataset(ds_bytes)
 ## Create and activate a virtual environment:
 
 ``` shell
-uv venv myenv
-source myenv/bin/activate  # macOS/Linux
-.\myenv\Scripts\activate   # Windows
+uv venv .venv
+source .venv/bin/activate  # macOS/Linux
+.\.venv\Scripts\activate   # Windows
 ```
 
 ## Install Dependencies

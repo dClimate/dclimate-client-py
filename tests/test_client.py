@@ -74,7 +74,7 @@ def patched_get_dataset_by_ipns_hash(ipfs_hash, as_of, gateway_uri=None):
     """
     Patch ipns dataset function to return a prepared dataset for testing
     """
-    with zarr.ZipStore(
+    with zarr.storage.ZipStore(
         SAMPLE_ZARRS / f"{ipfs_hash}.zip",
         mode="r",
     ) as in_zarr:
@@ -86,7 +86,7 @@ def patched_get_dataset_from_s3(dataset_name: str, bucket_name: str):
     Patch ipns dataset function to return a prepared dataset for testing
     """
     dataset_name = dataset_name.split("-")[0]  # remove -hourly, -daily, etc.
-    with zarr.ZipStore(
+    with zarr.storage.ZipStore(
         SAMPLE_ZARRS / f"{dataset_name}_test.zip",
         mode="r",
     ) as in_zarr:
