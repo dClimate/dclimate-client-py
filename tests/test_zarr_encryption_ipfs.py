@@ -8,6 +8,7 @@ import pandas as pd
 import xarray as xr
 import pytest
 import zarr
+import json
 from numcodecs import register_codec
 # from zarr.codecs import BytesCodec
 from numcodecs.zarr3 import BytesBytesCodec, Blosc
@@ -66,7 +67,6 @@ def random_zarr_dataset():
     encryption_key = get_random_bytes(32)
     # Set the encryption key for the class
     EncryptionCodec.set_encryption_key(encryption_key)
-    print(encryption_key, ":Original Key")
     # Register the codec
     zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
   
@@ -79,6 +79,21 @@ def random_zarr_dataset():
     # Write the dataset to the zarr store with the encoding on the temp
     ds.to_zarr(zarr_path, mode="w", encoding=encoding)
 
+    # Navigate to validate the codec does not have the key
+    temp_path = os.path.join(zarr_path, "temp")
+    # Open the config.json file to check the codec
+    with open(os.path.join(temp_path, "zarr.json"), "r") as f:
+        json_string = f.read()
+        json_zarr = json.loads(json_string)
+        # Check if the codec is in the config.json
+        assert json_zarr["codecs"][2]["name"] == "xchacha20poly1305"
+        # Check if the header is in the config.json
+        assert json_zarr["codecs"][2]["configuration"]["header"] == "dclimate-Zarr"
+        # Check no other keys are in the codec
+        assert len(json_zarr["codecs"][2]["configuration"]) == 1
+        assert len(json_zarr["codecs"][2]) == 2
+
+    
     yield zarr_path, ds
 
     # Cleanup
@@ -97,32 +112,13 @@ def test_bad_encryption_keys():
 def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     zarr_path, expected_ds = random_zarr_dataset
 
-
-    # Generate Random Key
-    encryption_key = get_random_bytes(32)
-    # Set the encryption key for the class
-    EncryptionCodec.set_encryption_key(encryption_key)
-    print(encryption_key, ":New Key")
-    # Register the codec
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
-
     # Open the zarr store
     test_ds = xr.open_zarr(zarr_path)
 
-    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "Found Key")
-
-    # Ensure EncryptionCodec is there
-    assert isinstance(test_ds["temp"].encoding["compressors"][1], EncryptionCodec)
-    # Check _encryption_key is set
-    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "HERE1")
-    encryption_key = get_random_bytes(32)
-    EncryptionCodec.set_encryption_key(encryption_key)
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
-    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "HERE2")
-
-    # assert test_ds["temp"].encoding["compressors"][1]._encryption_key is not None
     # Check length of compressor is just 1 for default ZstdCodec
     assert len(test_ds["precip"].encoding["compressors"]) == 1
+    # Ensure EncryptionCodec is there
+    assert isinstance(test_ds["temp"].encoding["compressors"][1], EncryptionCodec)
 
     # Prepare Writing to IPFS
     hamt1 = HAMT(
@@ -156,16 +152,6 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
         "Precip values in loaded_ds1 and expected_ds are not identical!"
     )
-
-    encryption_key = get_random_bytes(32)
-    EncryptionCodec.set_encryption_key(encryption_key)
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
-
-    print(loaded_ds1["temp"].encoding["compressors"][1]._encryption_key)
-
-    # Print all class attributes of the EncryptionCodec instance
-    encryption_codec_instance = loaded_ds1["temp"].encoding["compressors"][1]
-    print(vars(encryption_codec_instance))
 
     # Create new encryption filter but with a different encryption key
     encryption_key = get_random_bytes(32)
