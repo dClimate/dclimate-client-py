@@ -36,6 +36,3 @@ Homepage = "https://dclimate.net/"
 [project.optional-dependencies]
 testing = ["pytest", "pytest-cov", "pytest-mock"]
 dev = ["pre-commit>=4.1.0", "ruff>=0.9.5"]
-
-[tool.uv.sources]
-py-hamt = { git = "https://github.com/dClimate/py-hamt.git" }
