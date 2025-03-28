@@ -7,11 +7,14 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import pytest
+import zarr
 from numcodecs import register_codec
+# from zarr.codecs import BytesCodec
+from numcodecs.zarr3 import BytesBytesCodec, Blosc
 
 from Crypto.Random import get_random_bytes
 
-from py_hamt import HAMT, IPFSStore
+from py_hamt import HAMT, IPFSStore, IPFSZarr3
 
 from dclimate_zarr_client.encryption_codec import EncryptionCodec
 
@@ -63,15 +66,14 @@ def random_zarr_dataset():
     encryption_key = get_random_bytes(32)
     # Set the encryption key for the class
     EncryptionCodec.set_encryption_key(encryption_key)
+    print(encryption_key, ":Original Key")
     # Register the codec
-    register_codec(EncryptionCodec(header="dClimate-Zarr"))
-
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+  
     # Apply the encryption codec to the dataset with a selected header
     encoding = {
         "temp": {
-            "filters": [
-                EncryptionCodec(header="dClimate-Zarr")
-            ],  # Add the Delta filter
+            "compressors": [Blosc(cname="lz4", clevel=5), EncryptionCodec(header="dclimate-Zarr")],
         }
     }
     # Write the dataset to the zarr store with the encoding on the temp
@@ -95,21 +97,42 @@ def test_bad_encryption_keys():
 def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     zarr_path, expected_ds = random_zarr_dataset
 
+
+    # Generate Random Key
+    encryption_key = get_random_bytes(32)
+    # Set the encryption key for the class
+    EncryptionCodec.set_encryption_key(encryption_key)
+    print(encryption_key, ":New Key")
+    # Register the codec
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+
     # Open the zarr store
     test_ds = xr.open_zarr(zarr_path)
 
-    # Check if encryption applied to temp but not to precip
-    assert test_ds["temp"].encoding["filters"][0].header == "dClimate-Zarr"
-    assert test_ds["precip"].encoding["filters"] is None
+    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "Found Key")
+
+    # Ensure EncryptionCodec is there
+    assert isinstance(test_ds["temp"].encoding["compressors"][1], EncryptionCodec)
+    # Check _encryption_key is set
+    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "HERE1")
+    encryption_key = get_random_bytes(32)
+    EncryptionCodec.set_encryption_key(encryption_key)
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+    print(test_ds["temp"].encoding["compressors"][1]._encryption_key, "HERE2")
+
+    # assert test_ds["temp"].encoding["compressors"][1]._encryption_key is not None
+    # Check length of compressor is just 1 for default ZstdCodec
+    assert len(test_ds["precip"].encoding["compressors"]) == 1
 
     # Prepare Writing to IPFS
     hamt1 = HAMT(
         store=IPFSStore(),
     )
+    ipfszarr3 = IPFSZarr3(hamt1)
 
     # Reusing the same encryption key as its still stored in the class in numcodecs
     test_ds.to_zarr(
-        store=hamt1,
+        store=ipfszarr3,
         mode="w",
     )
 
@@ -121,9 +144,10 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
         root_node_id=hamt1_root,
         read_only=True,
     )
+    hamt1_read_z3 = IPFSZarr3(hamt1_read)
 
     # Open the zarr store thats encrypted on IPFS
-    loaded_ds1 = xr.open_zarr(store=hamt1_read)
+    loaded_ds1 = xr.open_zarr(store=hamt1_read_z3)
     # Assert the values are the same
     # Check if the values of 'temp' and 'precip' are equal in all datasets
     assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
@@ -133,12 +157,22 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
         "Precip values in loaded_ds1 and expected_ds are not identical!"
     )
 
+    encryption_key = get_random_bytes(32)
+    EncryptionCodec.set_encryption_key(encryption_key)
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+
+    print(loaded_ds1["temp"].encoding["compressors"][1]._encryption_key)
+
+    # Print all class attributes of the EncryptionCodec instance
+    encryption_codec_instance = loaded_ds1["temp"].encoding["compressors"][1]
+    print(vars(encryption_codec_instance))
+
     # Create new encryption filter but with a different encryption key
     encryption_key = get_random_bytes(32)
     EncryptionCodec.set_encryption_key(encryption_key)
-    register_codec(EncryptionCodec(header="dClimate-Zarr"))
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
 
-    loaded_failure = xr.open_zarr(store=hamt1_read)
+    loaded_failure = xr.open_zarr(store=hamt1_read_z3)
     # Accessing data should raise an exception since we don't have the correct encryption key
     with pytest.raises(Exception):
         _ = loaded_failure["temp"].values
