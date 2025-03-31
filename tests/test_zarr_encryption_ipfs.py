@@ -20,8 +20,28 @@ from py_hamt import HAMT, IPFSStore, IPFSZarr3
 from dclimate_zarr_client.encryption_codec import EncryptionCodec
 
 
+# Register the codec type *once* globally or in a fixture
+# This only tells Zarr about the *class*, not the key.
+@pytest.fixture(scope="module", autouse=True)
+def register_encryption_codec():
+    try:
+        # Attempt registration, ignore if already done
+        zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+    except ValueError: # Or whatever error your registry throws on duplicate
+        pass
+
+# Fixture to provide the encryption key used for initial dataset creation
+# This assumes random_zarr_dataset uses this key
+@pytest.fixture(scope="session")
+def original_encryption_key() -> bytes:
+    # Use a fixed key for the session or generate once if needed,
+    # but ensure it's the *same* key used by random_zarr_dataset fixture
+    # For simplicity, let's generate it here. The fixture needs to use this.
+    # In a real scenario, this might come from a shared config or setup.
+    return get_random_bytes(32)
+
 @pytest.fixture
-def random_zarr_dataset():
+def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, xr.Dataset]:
     """Creates a random xarray Dataset and saves it to a temporary zarr store.
     Returns:
         tuple: (dataset_path, expected_data)
@@ -29,8 +49,7 @@ def random_zarr_dataset():
             - expected_data: The original xarray Dataset for comparison
     """
     # Create temporary directory for zarr store
-    temp_dir = tempfile.mkdtemp()
-    zarr_path = os.path.join(temp_dir, "test.zarr")
+    zarr_path = str(tmp_path / "random.zarr")
 
     # Coordinates of the random data
     times = pd.date_range("2024-01-01", periods=100)
@@ -62,13 +81,6 @@ def random_zarr_dataset():
         },
         attrs={"description": "Test dataset with random weather data"},
     )
-
-    # Generate Random Key
-    encryption_key = get_random_bytes(32)
-    # Set the encryption key for the class
-    EncryptionCodec.set_encryption_key(encryption_key)
-    # Register the codec
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
   
     # Apply the encryption codec to the dataset with a selected header
     encoding = {
@@ -76,8 +88,10 @@ def random_zarr_dataset():
             "compressors": [Blosc(cname="lz4", clevel=5), EncryptionCodec(header="dclimate-Zarr")],
         }
     }
-    # Write the dataset to the zarr store with the encoding on the temp
-    ds.to_zarr(zarr_path, mode="w", encoding=encoding)
+
+    # Write the dataset WITH the key context
+    with EncryptionCodec.key_context(original_encryption_key):
+        ds.to_zarr(zarr_path, mode="w", encoding=encoding, consolidated=False) # Use consolidated=False for IPFS HAMT stores typically
 
     # Navigate to validate the codec does not have the key
     temp_path = os.path.join(zarr_path, "temp")
@@ -93,27 +107,30 @@ def random_zarr_dataset():
         assert len(json_zarr["codecs"][2]["configuration"]) == 1
         assert len(json_zarr["codecs"][2]) == 2
 
-    
     yield zarr_path, ds
 
     # Cleanup
-    shutil.rmtree(temp_dir)
+    shutil.rmtree(tmp_path)
 
 
 def test_bad_encryption_keys():
-    # Assert failure Encryption key must be set before using EncryptionCodec
-    with pytest.raises(ValueError):
-        EncryptionCodec(header="dClimate-Zarr")
     # Assert failure Encryption key must be 32 bytes (64 hex characters)
     with pytest.raises(ValueError):
-        EncryptionCodec.set_encryption_key(get_random_bytes(31))
+        with EncryptionCodec.key_context(get_random_bytes(31)):
+            pass
+
+def test_compute_encoded_size():
+    # Example function to compute the encoded size of a dataset
+    assert EncryptionCodec().compute_encoded_size(100, "RANDOM VALUE") == 140
 
 
-def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
+def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes):
     zarr_path, expected_ds = random_zarr_dataset
 
-    # Open the zarr store
-    test_ds = xr.open_zarr(zarr_path)
+   # 1. Open the initial zarr store (using the correct key context)
+    #    and verify its structure.
+    with EncryptionCodec.key_context(original_encryption_key):
+        test_ds = xr.open_zarr(zarr_path, consolidated=False) # Match write setting
 
     # Check length of compressor is just 1 for default ZstdCodec
     assert len(test_ds["precip"].encoding["compressors"]) == 1
@@ -126,12 +143,16 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     )
     ipfszarr3 = IPFSZarr3(hamt1)
 
-    # Reusing the same encryption key as its still stored in the class in numcodecs
-    test_ds.to_zarr(
-        store=ipfszarr3,
-        mode="w",
-    )
-
+    # Write to IPFS store WITH the key context
+    # We use test_ds which was opened correctly, xarray should reuse its encoding config.
+    # The context ensures the key is available when zarr/numcodecs needs it via from_dict.
+    with EncryptionCodec.key_context(original_encryption_key):
+        test_ds.to_zarr(
+            store=ipfszarr3,
+            mode="w",
+            consolidated=False # Match read setting
+        )
+    
     hamt1_root: CID = hamt1.root_node_id  # type: ignore
 
     # Read the dataset from IPFS
@@ -142,28 +163,36 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset]):
     )
     hamt1_read_z3 = IPFSZarr3(hamt1_read)
 
-    # Open the zarr store thats encrypted on IPFS
-    loaded_ds1 = xr.open_zarr(store=hamt1_read_z3)
-    # Assert the values are the same
-    # Check if the values of 'temp' and 'precip' are equal in all datasets
-    assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
-        "Temp values in loaded_ds1 and expected_ds are not identical!"
-    )
-    assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
-        "Precip values in loaded_ds1 and expected_ds are not identical!"
-    )
+    with EncryptionCodec.key_context(original_encryption_key):
+        loaded_ds1 = xr.open_zarr(store=hamt1_read_z3, consolidated=False) # Match write setting
 
-    # Create new encryption filter but with a different encryption key
-    encryption_key = get_random_bytes(32)
-    EncryptionCodec.set_encryption_key(encryption_key)
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+        # Assert the values are the same and can be read in the context
+        # Check if the values of 'temp' and 'precip' are equal in all datasets
+        assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
+            "Temp values in loaded_ds1 and expected_ds are not identical!"
+        )
+        assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
+            "Precip values in loaded_ds1 and expected_ds are not identical!"
+        )
 
-    loaded_failure = xr.open_zarr(store=hamt1_read_z3)
-    # Accessing data should raise an exception since we don't have the correct encryption key
-    with pytest.raises(Exception):
-        _ = loaded_failure["temp"].values
+    # Open a new instance outside the context
+    loaded_ds2 = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
+    with pytest.raises(ValueError):
+        test_read = loaded_ds2["temp"].values
 
-    # Check that you can still read the precip since it was not encrypted
+    # Attempt to read with the WRONG key (using the key context)
+    wrong_encryption_key = get_random_bytes(32)
+    assert wrong_encryption_key != original_encryption_key # Ensure it's different
+
+    # Use the *wrong* key in the context
+    with EncryptionCodec.key_context(wrong_encryption_key):
+        loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
+
+        # Accessing data should raise an exception since we don't have the correct encryption key
+        with pytest.raises(Exception):
+            _ = loaded_failure["temp"].values
+
+    # Check that you can still read the precip since it was not encrypted outside of the context
     assert loaded_failure["precip"].values[0][0][0]
 
     assert "temp" in loaded_ds1
