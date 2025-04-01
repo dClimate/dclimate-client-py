@@ -5,13 +5,11 @@ from zarr.core.buffer import Buffer
 from zarr.core.common import JSON
 from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Random import get_random_bytes
-import contextvars
-from contextlib import contextmanager
 
 class EncryptionCodec(BytesBytesCodec):
     """A Zarr v3 codec implementing XChaCha20-Poly1305 encryption."""
     codec_id = "xchacha20poly1305"
-    _context_key = contextvars.ContextVar('encryption_key', default=None)
+    _encryption_key = None
 
     def __init__(self, header: str = "dclimate-Zarr"):
         """Initialize the codec with an optional header for associated data.
@@ -21,24 +19,15 @@ class EncryptionCodec(BytesBytesCodec):
         """
         self.header = header
         self._encoded_header = header.encode()
-
-    def _get_active_key(self) -> bytes:
-        context_key = self._context_key.get()
-        if context_key is None:
-            raise ValueError("Encryption key not available in instance or context")
-        return context_key
+        if self._encryption_key is None:
+            raise ValueError("Encryption key must be set before using EncryptionCodec.")
 
     @classmethod
-    @contextmanager
-    def key_context(cls, key: bytes | None):
-        """Set the encryption key in the current context."""
-        if key is not None and len(key) != 32:
+    def set_encryption_key(cls, encryption_key: bytes):
+        """Set the encryption key dynamically (once per runtime)."""
+        if len(encryption_key) != 32:  # 32 bytes = 64 hex chars
             raise ValueError("Encryption key must be 32 bytes")
-        token = cls._context_key.set(key)
-        try:
-            yield
-        finally:
-            cls._context_key.reset(token)
+        cls._encryption_key = encryption_key
 
     @classmethod
     def from_dict(cls, data: dict[str, JSON]) -> Self:
@@ -78,7 +67,7 @@ class EncryptionCodec(BytesBytesCodec):
         buf = chunk_bytes.to_bytes()
         def decrypt():
             nonce, tag, ciphertext = buf[:24], buf[24:40], buf[40:]
-            cipher = ChaCha20_Poly1305.new(key=self._get_active_key(), nonce=nonce)
+            cipher = ChaCha20_Poly1305.new(key=self._encryption_key, nonce=nonce)
             cipher.update(self._encoded_header)
             return cipher.decrypt_and_verify(ciphertext, tag)
 
@@ -99,7 +88,7 @@ class EncryptionCodec(BytesBytesCodec):
 
         def encrypt():
             nonce = get_random_bytes(24)
-            cipher = ChaCha20_Poly1305.new(key=self._get_active_key(), nonce=nonce)
+            cipher = ChaCha20_Poly1305.new(key=self._encryption_key, nonce=nonce)
             cipher.update(self._encoded_header)
             ciphertext, tag = cipher.encrypt_and_digest(raw)
             return nonce + tag + ciphertext

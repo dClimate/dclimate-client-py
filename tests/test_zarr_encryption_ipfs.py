@@ -19,17 +19,6 @@ from py_hamt import HAMT, IPFSStore, IPFSZarr3
 
 from dclimate_zarr_client.encryption_codec import EncryptionCodec
 
-
-# Register the codec type *once* globally or in a fixture
-# This only tells Zarr about the *class*, not the key.
-@pytest.fixture(scope="module", autouse=True)
-def register_encryption_codec():
-    try:
-        # Attempt registration, ignore if already done
-        zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
-    except ValueError: # Or whatever error your registry throws on duplicate
-        pass
-
 # Fixture to provide the encryption key used for initial dataset creation
 # This assumes random_zarr_dataset uses this key
 @pytest.fixture(scope="session")
@@ -82,6 +71,13 @@ def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, 
         attrs={"description": "Test dataset with random weather data"},
     )
   
+
+    # Set the encryption key for the class
+    EncryptionCodec.set_encryption_key(original_encryption_key)
+    # Register the codec
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+
+
     # Apply the encryption codec to the dataset with a selected header
     encoding = {
         "temp": {
@@ -89,9 +85,7 @@ def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, 
         }
     }
 
-    # Write the dataset WITH the key context
-    with EncryptionCodec.key_context(original_encryption_key):
-        ds.to_zarr(zarr_path, mode="w", encoding=encoding, consolidated=False) # Use consolidated=False for IPFS HAMT stores typically
+    ds.to_zarr(zarr_path, mode="w", encoding=encoding, consolidated=False) # Use consolidated=False for IPFS HAMT stores typically
 
     # Navigate to validate the codec does not have the key
     temp_path = os.path.join(zarr_path, "temp")
@@ -114,23 +108,23 @@ def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, 
 
 
 def test_bad_encryption_keys():
+    # Assert failure Encryption key must be set before using EncryptionCodec
+    with pytest.raises(ValueError):
+        EncryptionCodec(header="dClimate-Zarr")
     # Assert failure Encryption key must be 32 bytes (64 hex characters)
     with pytest.raises(ValueError):
-        with EncryptionCodec.key_context(get_random_bytes(31)):
-            pass
+        EncryptionCodec.set_encryption_key(get_random_bytes(31))
 
 def test_compute_encoded_size():
     # Example function to compute the encoded size of a dataset
+    EncryptionCodec.set_encryption_key(get_random_bytes(32))
     assert EncryptionCodec().compute_encoded_size(100, "RANDOM VALUE") == 140
 
 
 def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes):
     zarr_path, expected_ds = random_zarr_dataset
 
-   # 1. Open the initial zarr store (using the correct key context)
-    #    and verify its structure.
-    with EncryptionCodec.key_context(original_encryption_key):
-        test_ds = xr.open_zarr(zarr_path, consolidated=False) # Match write setting
+    test_ds = xr.open_zarr(zarr_path, consolidated=False) # Match write setting
 
     # Check length of compressor is just 1 for default ZstdCodec
     assert len(test_ds["precip"].encoding["compressors"]) == 1
@@ -143,11 +137,7 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_
     )
     ipfszarr3 = IPFSZarr3(hamt1)
 
-    # Write to IPFS store WITH the key context
-    # We use test_ds which was opened correctly, xarray should reuse its encoding config.
-    # The context ensures the key is available when zarr/numcodecs needs it via from_dict.
-    with EncryptionCodec.key_context(original_encryption_key):
-        test_ds.to_zarr(
+    test_ds.to_zarr(
             store=ipfszarr3,
             mode="w",
             consolidated=False # Match read setting
@@ -163,36 +153,33 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_
     )
     hamt1_read_z3 = IPFSZarr3(hamt1_read)
 
-    with EncryptionCodec.key_context(original_encryption_key):
-        loaded_ds1 = xr.open_zarr(store=hamt1_read_z3, consolidated=False) # Match write setting
+    loaded_ds1 = xr.open_zarr(store=hamt1_read_z3, consolidated=False) # Match write setting
 
-        # Assert the values are the same and can be read in the context
-        # Check if the values of 'temp' and 'precip' are equal in all datasets
-        assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
-            "Temp values in loaded_ds1 and expected_ds are not identical!"
-        )
-        assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
-            "Precip values in loaded_ds1 and expected_ds are not identical!"
-        )
+    # Assert the values are the same and can be read in the context
+    # Check if the values of 'temp' and 'precip' are equal in all datasets
+    assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
+        "Temp values in loaded_ds1 and expected_ds are not identical!"
+    )
+    assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
+        "Precip values in loaded_ds1 and expected_ds are not identical!"
+    )
 
-    # Open a new instance outside the context
-    loaded_ds2 = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
-    with pytest.raises(ValueError):
-        test_read = loaded_ds2["temp"].values
-
-    # Attempt to read with the WRONG key (using the key context)
+    # Attempt to read with the WRONG key 
+    # Create new encryption filter but with a different encryption key
     wrong_encryption_key = get_random_bytes(32)
+    EncryptionCodec.set_encryption_key(wrong_encryption_key)
+    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+
     assert wrong_encryption_key != original_encryption_key # Ensure it's different
 
-    # Use the *wrong* key in the context
-    with EncryptionCodec.key_context(wrong_encryption_key):
-        loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
 
-        # Accessing data should raise an exception since we don't have the correct encryption key
-        with pytest.raises(Exception):
-            _ = loaded_failure["temp"].values
+    loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
 
-    # Check that you can still read the precip since it was not encrypted outside of the context
+    # Accessing data should raise an exception since we don't have the correct encryption key
+    with pytest.raises(Exception):
+        _ = loaded_failure["temp"].values
+
+    # Check that you can still read the precip since it was not encrypted
     assert loaded_failure["precip"].values[0][0][0]
 
     assert "temp" in loaded_ds1
