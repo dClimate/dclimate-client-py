@@ -300,8 +300,8 @@ def test_geo_temporal_query():
         point_kwargs={"latitude": 40.875, "longitude": -104.875},
         time_range=[datetime.datetime(2023, 1, 1), datetime.datetime(2023, 1, 1)],
     )
-    print(ds_bytes)
     assert ds_bytes["data"][0] == 0.7991394996643066
+
 
 # def test_get_dataset_by_ipns_hash_no_as_of():
 #     """
