@@ -1,6 +1,5 @@
 import os
 import shutil
-import tempfile
 
 from multiformats import CID
 import numpy as np
@@ -9,15 +8,16 @@ import xarray as xr
 import pytest
 import zarr
 import json
-from numcodecs import register_codec
+
 # from zarr.codecs import BytesCodec
-from numcodecs.zarr3 import BytesBytesCodec, Blosc
+from numcodecs.zarr3 import Blosc
 
 from Crypto.Random import get_random_bytes
 
 from py_hamt import HAMT, IPFSStore, IPFSZarr3
 
 from dclimate_zarr_client.encryption_codec import EncryptionCodec
+
 
 # Fixture to provide the encryption key used for initial dataset creation
 # This assumes random_zarr_dataset uses this key
@@ -29,8 +29,11 @@ def original_encryption_key() -> bytes:
     # In a real scenario, this might come from a shared config or setup.
     return get_random_bytes(32)
 
+
 @pytest.fixture
-def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, xr.Dataset]:
+def random_zarr_dataset(
+    tmp_path, original_encryption_key: bytes
+) -> tuple[str, xr.Dataset]:
     """Creates a random xarray Dataset and saves it to a temporary zarr store.
     Returns:
         tuple: (dataset_path, expected_data)
@@ -70,22 +73,25 @@ def random_zarr_dataset(tmp_path, original_encryption_key: bytes) -> tuple[str, 
         },
         attrs={"description": "Test dataset with random weather data"},
     )
-  
 
     # Set the encryption key for the class
     EncryptionCodec.set_encryption_key(original_encryption_key)
     # Register the codec
     zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
 
-
     # Apply the encryption codec to the dataset with a selected header
     encoding = {
         "temp": {
-            "compressors": [Blosc(cname="lz4", clevel=5), EncryptionCodec(header="dclimate-Zarr")],
+            "compressors": [
+                Blosc(cname="lz4", clevel=5),
+                EncryptionCodec(header="dclimate-Zarr"),
+            ],
         }
     }
 
-    ds.to_zarr(zarr_path, mode="w", encoding=encoding, consolidated=False) # Use consolidated=False for IPFS HAMT stores typically
+    ds.to_zarr(
+        zarr_path, mode="w", encoding=encoding, consolidated=False
+    )  # Use consolidated=False for IPFS HAMT stores typically
 
     # Navigate to validate the codec does not have the key
     temp_path = os.path.join(zarr_path, "temp")
@@ -115,16 +121,19 @@ def test_bad_encryption_keys():
     with pytest.raises(ValueError):
         EncryptionCodec.set_encryption_key(get_random_bytes(31))
 
+
 def test_compute_encoded_size():
     # Example function to compute the encoded size of a dataset
     EncryptionCodec.set_encryption_key(get_random_bytes(32))
     assert EncryptionCodec().compute_encoded_size(100, "RANDOM VALUE") == 140
 
 
-def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes):
+def test_upload_then_read(
+    random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes
+):
     zarr_path, expected_ds = random_zarr_dataset
 
-    test_ds = xr.open_zarr(zarr_path, consolidated=False) # Match write setting
+    test_ds = xr.open_zarr(zarr_path, consolidated=False)  # Match write setting
 
     # Check length of compressor is just 1 for default ZstdCodec
     assert len(test_ds["precip"].encoding["compressors"]) == 1
@@ -138,11 +147,11 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_
     ipfszarr3 = IPFSZarr3(hamt1)
 
     test_ds.to_zarr(
-            store=ipfszarr3,
-            mode="w",
-            consolidated=False # Match read setting
-        )
-    
+        store=ipfszarr3,
+        mode="w",
+        consolidated=False,  # Match read setting
+    )
+
     hamt1_root: CID = hamt1.root_node_id  # type: ignore
 
     # Read the dataset from IPFS
@@ -153,7 +162,9 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_
     )
     hamt1_read_z3 = IPFSZarr3(hamt1_read)
 
-    loaded_ds1 = xr.open_zarr(store=hamt1_read_z3, consolidated=False) # Match write setting
+    loaded_ds1 = xr.open_zarr(
+        store=hamt1_read_z3, consolidated=False
+    )  # Match write setting
 
     # Assert the values are the same and can be read in the context
     # Check if the values of 'temp' and 'precip' are equal in all datasets
@@ -164,14 +175,13 @@ def test_upload_then_read(random_zarr_dataset: tuple[str, xr.Dataset], original_
         "Precip values in loaded_ds1 and expected_ds are not identical!"
     )
 
-    # Attempt to read with the WRONG key 
+    # Attempt to read with the WRONG key
     # Create new encryption filter but with a different encryption key
     wrong_encryption_key = get_random_bytes(32)
     EncryptionCodec.set_encryption_key(wrong_encryption_key)
     zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
 
-    assert wrong_encryption_key != original_encryption_key # Ensure it's different
-
+    assert wrong_encryption_key != original_encryption_key  # Ensure it's different
 
     loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
 

@@ -30,7 +30,7 @@ def patched_get_single_metadata(ipfs_hash):
 
 
 def patched_resolve_ipns_name_hash(ipns_name_hash):
-    return "bafyreibtdfcfyyineq7pv2xunl4sxq6w6ziibswflmelaiydgbqwjk2sku"
+    return "bafyr4iff6vuvpkb4zexkx7exoafsjvfnno4ofidyc37gsto2aaxixg5zia"
 
 
 # def patched_get_dataset_by_ipfs_hash(ipfs_hash):
@@ -296,12 +296,12 @@ def test_list_datasets_local_cache_empty():
 
 def test_geo_temporal_query():
     ds_bytes = geo_temporal_query(
-        "chirps-final-p05",
-        point_kwargs={"latitude": 40.726446, "longitude": -95.937581},
-        time_range=[datetime.datetime(2021, 1, 1), datetime.datetime(2021, 1, 1)],
+        "cpc-precip-conus",
+        point_kwargs={"latitude": 40.875, "longitude": -104.875},
+        time_range=[datetime.datetime(2023, 1, 1), datetime.datetime(2023, 1, 1)],
     )
-    assert ds_bytes["data"][0] == 2.8954310417175293
-
+    print(ds_bytes)
+    assert ds_bytes["data"][0] == 0.7991394996643066
 
 # def test_get_dataset_by_ipns_hash_no_as_of():
 #     """

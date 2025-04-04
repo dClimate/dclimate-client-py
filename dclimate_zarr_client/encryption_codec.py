@@ -6,8 +6,10 @@ from zarr.core.common import JSON
 from Crypto.Cipher import ChaCha20_Poly1305
 from Crypto.Random import get_random_bytes
 
+
 class EncryptionCodec(BytesBytesCodec):
     """A Zarr v3 codec implementing XChaCha20-Poly1305 encryption."""
+
     codec_id = "xchacha20poly1305"
     _encryption_key = None
 
@@ -49,10 +51,7 @@ class EncryptionCodec(BytesBytesCodec):
         Returns:
             dict: A dictionary with 'name' and 'configuration'.
         """
-        return {
-            "name": self.codec_id,
-            "configuration": {"header": self.header}
-        }
+        return {"name": self.codec_id, "configuration": {"header": self.header}}
 
     async def _decode_single(self, chunk_bytes: Buffer, chunk_spec) -> Buffer:
         """Asynchronously decrypt a chunk.
@@ -65,6 +64,7 @@ class EncryptionCodec(BytesBytesCodec):
             Buffer: Decrypted plaintext bytes.
         """
         buf = chunk_bytes.to_bytes()
+
         def decrypt():
             nonce, tag, ciphertext = buf[:24], buf[24:40], buf[40:]
             cipher = ChaCha20_Poly1305.new(key=self._encryption_key, nonce=nonce)
