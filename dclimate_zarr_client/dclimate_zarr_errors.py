@@ -23,7 +23,7 @@ class NoDataFoundError(ZarrClientError):
 
 
 class DatasetNotFoundError(ZarrClientError):
-    """Raised when dataset not available over IPNS"""
+    """Raised when dataset not available over IPNS/STAC or S3"""
 
 
 class InvalidForecastRequestError(ZarrClientError):
@@ -49,10 +49,18 @@ class BucketNotFoundError(ZarrClientError):
 
 
 class PathNotFoundError(ZarrClientError):
-    """Raised when bucket does not exist in AWS S3"""
+    """Raised when path does not exist in AWS S3 or IPFS"""
 
 
 class AmbiguousDataVariableError(ZarrClientError):
     """Raised when method that requires a specific data variable is called, the dataset
     has more than variable, and the dataset hasn't been specified by a call to
     :method:`dclimate_zarr_client.geotemporal_data.GeotemporalData.use`"""
+
+
+class IpfsConnectionError(ZarrClientError):
+    """Raised when connection to IPFS daemon or gateway fails"""
+
+
+class StacCatalogError(ZarrClientError):
+    """Raised for issues during STAC catalog traversal"""
