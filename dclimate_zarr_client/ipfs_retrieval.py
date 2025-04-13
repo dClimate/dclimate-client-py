@@ -25,7 +25,7 @@ logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 # --- Caching ---
-# Simple in-memory cache for STAC traversal results (dataset_id -> ipns_name)
+# Simple in-memory cache for STAC traversal results (dataset_id -> hamt_cid)
 # Cleared on each run. For persistent caching, a file-based approach could be used.
 _stac_hamt_cid_cache: typing.Dict[str, str] = {}
 
@@ -35,13 +35,20 @@ def _get_ipfs_store(
     gateway_uri_stem: str | None = None, rpc_uri_stem: str | None = None
 ) -> IPFSStore:
     """Creates or retrieves a configured IPFSStore instance."""
+    # Use environment variables as defaults if not provided
+    gateway = gateway_uri_stem or os.environ.get("IPFS_GATEWAY_URI_STEM")
+    rpc = rpc_uri_stem or os.environ.get("IPFS_RPC_URI_STEM")
+
     # Simple way to manage store instances per configuration.
     # More sophisticated caching/management might be needed in complex apps.
     store_kwargs = {}
-    if gateway_uri_stem:
-        store_kwargs["gateway_uri_stem"] = gateway_uri_stem
-    if rpc_uri_stem:
-        store_kwargs["rpc_uri_stem"] = rpc_uri_stem
+    # Only pass if explicitly set or found in env, otherwise IPFSStore uses its defaults
+    if gateway:
+        store_kwargs["gateway_uri_stem"] = gateway
+    if rpc:
+        store_kwargs["rpc_uri_stem"] = rpc
+
+    logger.debug(f"Creating IPFSStore with kwargs: {store_kwargs}")
     return IPFSStore(**store_kwargs)
 
 
@@ -52,9 +59,18 @@ def fetch_json_from_cid(cid_str: str, ipfs_store: IPFSStore) -> dict:
         logger.debug(f"Fetching JSON from CID: {cid_str}")
         if cid_str.startswith("/ipfs/"):
             cid_str = cid_str[6:]
-        cid = CID.decode(cid_str)
+
+        # Validate CID format before attempting fetch
+        try:
+            cid = CID.decode(cid_str)
+        except Exception as decode_err:
+            raise StacCatalogError(
+                f"Failed to decode CID string '{cid_str}': {decode_err}"
+            ) from decode_err
+
         # Use the store's timeout
         json_bytes = ipfs_store.load(cid)
+
         if not json_bytes:
             raise StacCatalogError(f"No data returned for CID: {cid_str}")
         return json.loads(json_bytes)
@@ -85,6 +101,7 @@ def fetch_json_from_ipns(
 ) -> dict:
     """
     Fetches and parses JSON data directly from an IPNS name using an HTTP Gateway GET request.
+    Includes retry logic (without nocache) on certain failures.
 
     Args:
         ipns_name (str): The IPNS name (with or without /ipns/ prefix).
@@ -105,6 +122,7 @@ def fetch_json_from_ipns(
     ipfs_store = _get_ipfs_store(gateway_uri_stem=gateway_uri_stem)
     gateway_base = ipfs_store.gateway_uri_stem
     if not gateway_base:
+        # IPFSStore provides a default, so this should ideally not happen unless explicitly cleared/misconfigured
         raise ValueError("IPFS Gateway URI stem is not configured.")
 
     if not ipns_name.startswith("/ipns/"):
@@ -112,18 +130,23 @@ def fetch_json_from_ipns(
     else:
         ipns_name_for_url = ipns_name
 
-    target_url = f"{gateway_base}{ipns_name_for_url}"
+    target_url = f"{gateway_base.rstrip('/')}{ipns_name_for_url}"
     response = None
     last_error = None
 
     # --- Attempt 1: GET with nocache=true ---
     try:
         params = {"nocache": "true"}
+        headers = {"Accept": "application/json"}  # Be explicit about wanting JSON
         logger.debug(
             f"Fetching JSON via Gateway GET (nocache=true): {ipns_name_for_url} at {target_url}"
         )
         response = requests.get(
-            target_url, params=params, timeout=timeout, allow_redirects=True
+            target_url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
         )
         response.raise_for_status()  # Check for HTTP errors
         # Directly parse JSON from response body
@@ -139,22 +162,29 @@ def fetch_json_from_ipns(
         logger.warning(
             f"Timeout fetching IPNS {ipns_name_for_url} via Gateway GET (nocache=true): {e}. Will retry without nocache."
         )
-        last_error = e
+        last_error = IpfsConnectionError(f"Timeout (nocache=true): {e}")
     except requests.exceptions.RequestException as e:  # Includes HTTP errors
         logger.warning(
             f"RequestException fetching IPNS {ipns_name_for_url} via Gateway GET (nocache=true): {e}. Will retry without nocache."
         )
         last_error = e
     except json.JSONDecodeError as e:
+        # This can happen if gateway returns HTML error page or non-JSON content
+        response_text = response.text[:500] if response else "[No Response]"
+        status_code = response.status_code if response else "[No Status]"
         logger.warning(
-            f"Invalid JSON fetching IPNS {ipns_name_for_url} via Gateway GET (nocache=true): {e}. Response text: {response.text[:500] if response else '[No Response]'}. Will retry."
+            f"Invalid JSON fetching IPNS {ipns_name_for_url} via Gateway GET (nocache=true, Status: {status_code}, URL: {target_url}): {e}. Response text: {response_text}. Will retry."
         )
-        last_error = e
+        last_error = StacCatalogError(
+            f"JSONDecodeError (nocache=true, Status: {status_code}): {e}. Response: {response_text[:100]}"
+        )
     except Exception as e:  # Catch other unexpected errors
         logger.warning(
             f"Unexpected error fetching IPNS {ipns_name_for_url} via Gateway GET (nocache=true): {e}. Will retry."
         )
-        last_error = e
+        last_error = StacCatalogError(
+            f"Unexpected error (nocache=true): {type(e).__name__}: {e}"
+        )
 
     # --- Attempt 2: GET without nocache (if Attempt 1 failed) ---
     logger.info(
@@ -162,11 +192,16 @@ def fetch_json_from_ipns(
     )
     try:
         params = {}  # No nocache
+        headers = {"Accept": "application/json"}
         logger.debug(
             f"Fetching JSON via Gateway GET (nocache=false): {ipns_name_for_url} at {target_url}"
         )
         response = requests.get(
-            target_url, params=params, timeout=timeout, allow_redirects=True
+            target_url,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
         )  # Retry
         response.raise_for_status()
         json_content = response.json()
@@ -224,6 +259,7 @@ def get_dataset_hamt_cid_from_stac(
     """
     Traverses the dClimate STAC catalog starting from a root IPNS name
     to find the HAMT root IPFS CID associated with the target dataset ID.
+    Handles IPLD link format `{"/": "cid_string"}`.
     """
     if target_dataset_id in _stac_hamt_cid_cache:
         logger.info(f"Found dataset '{target_dataset_id}' HAMT CID in cache.")
@@ -235,11 +271,11 @@ def get_dataset_hamt_cid_from_stac(
 
     # *** Use fetch_json_from_ipns for the root catalog ***
     try:
-        logger.info(f"Fetching root catalog content from IPNS: {root_catalog_ipns}")
+        logger.debug(f"Fetching root catalog content from IPNS: {root_catalog_ipns}")
         catalog = fetch_json_from_ipns(
             root_catalog_ipns, gateway_uri_stem=gateway_uri_stem
         )
-    except (IpfsConnectionError, StacCatalogError) as e:
+    except (IpfsConnectionError, StacCatalogError, ValueError) as e:
         raise StacCatalogError(
             f"Failed to fetch root catalog from IPNS '{root_catalog_ipns}': {e}"
         ) from e
@@ -253,19 +289,39 @@ def get_dataset_hamt_cid_from_stac(
     collections_to_visit = []
     for link in catalog.get("links", []):
         if link.get("rel") == "child" and link.get("type") == "application/json":
-            href = link.get("href")
-            if href and href.startswith("/ipfs/"):
-                collections_to_visit.append(href[6:])
+            href_obj = link.get("href")
+            if isinstance(href_obj, dict):
+                collection_cid_str = href_obj.get("/")
+                if isinstance(collection_cid_str, str):
+                    collections_to_visit.append(collection_cid_str)
+                    logger.debug(
+                        f"Found child collection link (CID): {collection_cid_str}"
+                    )
+                else:
+                    logger.warning(
+                        f"Skipping child link with invalid href dict content in root catalog: {link}"
+                    )
+            elif isinstance(href_obj, str) and href_obj.startswith("/ipfs/"):
+                # Allow legacy /ipfs/ string format for backward compatibility? Risky.
+                # For now, strictly expect dict for IPLD links as per example.
+                logger.warning(
+                    f"Skipping child link with unexpected string href format (expected dict): {link}"
+                )
+                # If needed: collections_to_visit.append(href_obj[6:])
             else:
-                logger.warning(f"Skipping invalid child link in root catalog: {link}")
+                logger.warning(
+                    f"Skipping invalid child link format in root catalog: {link}"
+                )
 
     if not collections_to_visit:
         raise StacCatalogError(
             f"No valid child collection links found in root catalog fetched from IPNS {root_catalog_ipns}"
         )
 
+    logger.info(f"Found {len(collections_to_visit)} collections to search.")
+
     for collection_cid in collections_to_visit:
-        logger.debug(f"Fetching collection: {collection_cid}")
+        logger.debug(f"Fetching collection content for CID: {collection_cid}")
         try:
             # *** Use fetch_json_from_cid ***
             collection = fetch_json_from_cid(collection_cid, ipfs_store)
@@ -274,70 +330,106 @@ def get_dataset_hamt_cid_from_stac(
                 or collection.get("type") != "Collection"
             ):
                 logger.warning(
-                    f"Skipping invalid collection format for CID {collection_cid}"
+                    f"Skipping invalid collection format for CID {collection_cid}. Type: {collection.get('type')}"
                 )
                 continue
 
+            items_found_in_collection = 0
             for link in collection.get("links", []):
                 if link.get("rel") == "item" and link.get("type") == "application/json":
-                    href = link.get("href")
-                    if href and href.startswith("/ipfs/"):
-                        item_cid = href[6:]
-                        logger.debug(f"Fetching item: {item_cid}")
+                    item_href_obj = link.get("href")
+                    item_cid = None  # Reset item_cid for each link
+
+                    # *** MODIFIED: Handle dict href for item links ***
+                    if isinstance(item_href_obj, dict):
+                        item_cid = item_href_obj.get("/")  # Extract item CID string
+                    elif isinstance(item_href_obj, str) and item_href_obj.startswith(
+                        "/ipfs/"
+                    ):
+                        logger.warning(
+                            f"Found item link with legacy string href format in {collection_cid}: {link}"
+                        )
+                        item_cid = item_href_obj[6:]
+                    else:
+                        logger.warning(
+                            f"Skipping invalid item link format in collection {collection_cid}: {link}"
+                        )
+                        continue  # Skip this link if format is wrong
+
+                    if isinstance(item_cid, str):
+                        items_found_in_collection += 1
+                        # logger.debug(f"Fetching item content for CID: {item_cid}") # Can be verbose
                         try:
-                            # *** Use fetch_json_from_cid ***
+                            # *** Use fetch_json_from_cid with the extracted item CID string ***
                             item = fetch_json_from_cid(item_cid, ipfs_store)
+
                             if (
                                 not isinstance(item, dict)
                                 or item.get("type") != "Feature"
                             ):
                                 logger.warning(
-                                    f"Skipping invalid item format for CID {item_cid}"
+                                    f"Skipping invalid item format for CID {item_cid}. Type: {item.get('type')}"
                                 )
                                 continue
 
                             item_id = item.get("id")
                             if item_id == target_dataset_id:
                                 logger.info(
-                                    f"Found matching item for '{target_dataset_id}' with CID {item_cid}"
+                                    f"Found matching item for '{target_dataset_id}' with CID {item_cid} in collection {collection_cid}"
                                 )
                                 hamt_asset = item.get("assets", {}).get("hamt-zarr", {})
-                                hamt_cid_href = hamt_asset.get("href")
+                                hamt_cid_href = hamt_asset.get(
+                                    "href"
+                                )  # This should be the /ipfs/ string
 
-                                if not hamt_cid_href or not hamt_cid_href.startswith(
-                                    "/ipfs/"
-                                ):
+                                if not isinstance(
+                                    hamt_cid_href, str
+                                ) or not hamt_cid_href.startswith("/ipfs/"):
                                     raise StacCatalogError(
-                                        f"STAC Item '{item_id}' (CID: {item_cid}) is missing a valid 'assets.hamt-zarr.href'. Found: '{hamt_cid_href}'"
+                                        f"STAC Item '{item_id}' (CID: {item_cid}) is missing a valid string 'assets.hamt-zarr.href' starting with /ipfs/. Found: '{hamt_cid_href}' (type: {type(hamt_cid_href).__name__})"
                                     )
-                                hamt_cid_str = hamt_cid_href[6:]
+
+                                hamt_cid_str = hamt_cid_href[
+                                    6:
+                                ]  # Slice the /ipfs/ prefix
                                 logger.info(
-                                    f"Found HAMT CID for '{target_dataset_id}': {hamt_cid_str}"
+                                    f"Successfully extracted HAMT CID for '{target_dataset_id}': {hamt_cid_str}"
                                 )
                                 _stac_hamt_cid_cache[target_dataset_id] = hamt_cid_str
                                 return hamt_cid_str
 
                         except (StacCatalogError, IpfsConnectionError) as item_err:
+                            # Log error but continue searching other items/collections
                             logger.error(
                                 f"Error processing item {item_cid} in collection {collection_cid}, continuing search: {item_err}"
                             )
-                        except Exception as item_err:
+                        except (
+                            Exception
+                        ) as item_err:  # Catch unexpected errors during item processing
                             logger.error(
-                                f"Unexpected error processing item {item_cid}, continuing search: {item_err}"
+                                f"Unexpected error processing item {item_cid} in collection {collection_cid}, continuing search: {type(item_err).__name__}: {item_err}"
                             )
-                    # else: Skipping invalid item link
+                    # else: Invalid item CID extracted, already logged warning
+
+            logger.debug(
+                f"Finished searching {items_found_in_collection} items in collection {collection.get('id', collection_cid)}."
+            )
 
         except (StacCatalogError, IpfsConnectionError) as col_err:
+            # Log error but continue searching other collections
             logger.error(
                 f"Error processing collection {collection_cid}, continuing search: {col_err}"
             )
-        except Exception as col_err:
+        except (
+            Exception
+        ) as col_err:  # Catch unexpected errors during collection processing
             logger.error(
-                f"Unexpected error processing collection {collection_cid}, continuing search: {col_err}"
+                f"Unexpected error processing collection {collection_cid}, continuing search: {type(col_err).__name__}: {col_err}"
             )
 
+    # If loop completes without finding the dataset
     raise DatasetNotFoundError(
-        f"Dataset ID '{target_dataset_id}' not found in the STAC catalog rooted at '{root_catalog_ipns}'."
+        f"Dataset ID '{target_dataset_id}' not found after searching all collections in the STAC catalog rooted at IPNS '{root_catalog_ipns}'."
     )
 
 
@@ -534,8 +626,18 @@ def _get_dataset_by_ipfs_cid(
 
     try:
         # root_node_id expects a CID object or string representation
-        cid_obj = CID.decode(ipfs_cid)
+        cid_obj = None
+        try:
+            cid_obj = CID.decode(ipfs_cid)
+        except Exception as decode_err:
+            raise ValueError(
+                f"Invalid IPFS CID format: {ipfs_cid}. Error: {decode_err}"
+            ) from decode_err
+
+        # Initialize HAMT store
         hamt_store = HAMT(store=ipfs_store, root_node_id=cid_obj, read_only=True)
+
+        # Wrap with IPFSZarr3 store adapter
         ipfszarr3_store = IPFSZarr3(hamt_store, read_only=True)
 
         # Ensure registered codecs (like encryption) are available if needed
@@ -545,15 +647,33 @@ def _get_dataset_by_ipfs_cid(
         ds = xr.open_zarr(store=ipfszarr3_store, chunks=None)
         logger.info(f"Successfully loaded dataset from CID: {ipfs_cid}")
         return ds
-    except Exception as e:
-        # More specific error catching could be added here (e.g., for Zarr format errors)
-        if "Connection refused" in str(e) or "Max retries exceeded" in str(e):
+    except (requests.exceptions.RequestException, IpfsConnectionError) as e:
+        # Catch connection/network errors during loading
+        if (
+            "Connection refused" in str(e)
+            or "Max retries exceeded" in str(e)
+            or "Timeout" in str(e)
+        ):
             raise IpfsConnectionError(
-                f"Failed to connect to IPFS while loading dataset from CID {ipfs_cid}. "
+                f"IPFS connection failed while loading dataset from CID {ipfs_cid}. "
                 f"Gateway: {ipfs_store.gateway_uri_stem}, RPC: {ipfs_store.rpc_uri_stem}. Details: {e}"
             ) from e
-        logger.error(f"Failed to load dataset from IPFS CID {ipfs_cid}: {e}")
-        # Re-raise a more specific or generic error
+        else:
+            # Other network errors
+            raise RuntimeError(
+                f"Network error loading Zarr dataset from IPFS CID {ipfs_cid}: {e}"
+            ) from e
+    except FileNotFoundError as e:
+        # xarray/zarr raises FileNotFoundError if root metadata (.zgroup, .zarray) is missing
+        raise StacCatalogError(
+            f"Zarr metadata not found at CID {ipfs_cid}. Is it a valid Zarr root? Error: {e}"
+        ) from e
+    except Exception as e:
+        # Catch other potential errors (e.g., Zarr format errors, py-hamt errors)
+        logger.error(
+            f"Failed to load Zarr dataset from IPFS CID {ipfs_cid}: {type(e).__name__}: {e}",
+            exc_info=True,
+        )
         raise RuntimeError(
             f"Failed to load Zarr dataset from IPFS CID {ipfs_cid}"
         ) from e
@@ -616,15 +736,21 @@ def list_datasets(
     rpc_uri_stem: str | None = None,
 ) -> typing.List[str]:
     """
-    Lists available dataset IDs by traversing the STAC catalog.
-    Also populates the internal HAMT CID cache.
+    Lists available dataset IDs by traversing the STAC catalog starting from IPNS.
+    Handles IPLD link format `{"/": "cid_string"}`.
+    Also populates the internal HAMT CID cache as a side effect.
     """
     if root_catalog_ipns is None:
+        # Avoid circular import, get constant dynamically if needed
         from .client import DCLIMATE_STAC_CATALOG_IPNS
 
         root_catalog_ipns = DCLIMATE_STAC_CATALOG_IPNS
+        if not root_catalog_ipns:
+            raise ValueError("Root catalog IPNS name is not defined.")
 
-    logger.info(f"Listing datasets from STAC catalog: {root_catalog_ipns}")
+    logger.info(
+        f"Listing datasets by traversing STAC catalog from IPNS: {root_catalog_ipns}"
+    )
     ipfs_store = _get_ipfs_store(gateway_uri_stem, rpc_uri_stem)
     dataset_ids = set()
 
@@ -633,62 +759,100 @@ def list_datasets(
         catalog = fetch_json_from_ipns(
             root_catalog_ipns, gateway_uri_stem=gateway_uri_stem
         )
-    except (IpfsConnectionError, StacCatalogError) as e:
+    except (IpfsConnectionError, StacCatalogError, ValueError) as e:
+        # Make error message slightly more specific for listing context
         raise StacCatalogError(
-            f"Failed to fetch root catalog from IPNS '{root_catalog_ipns}' for listing: {e}"
+            f"Failed to fetch or parse root catalog from IPNS '{root_catalog_ipns}' for listing datasets: {e}"
         ) from e
 
-    # Rest of the logic remains similar, using fetch_json_from_cid
     if not isinstance(catalog, dict) or catalog.get("type") != "Catalog":
         raise StacCatalogError(
-            f"Invalid root catalog format fetched from IPNS {root_catalog_ipns} for listing"
+            f"Invalid root catalog format fetched from IPNS {root_catalog_ipns} for listing. Type: {catalog.get('type')}"
         )
 
     collections_to_visit = []
     for link in catalog.get("links", []):
         if link.get("rel") == "child" and link.get("type") == "application/json":
-            href = link.get("href")
-            if href and href.startswith("/ipfs/"):
-                collections_to_visit.append(href[6:])
+            href_obj = link.get("href")
+            # *** MODIFIED: Handle dict href for IPLD links ***
+            if isinstance(href_obj, dict):
+                collection_cid_str = href_obj.get("/")
+                if isinstance(collection_cid_str, str):
+                    collections_to_visit.append(collection_cid_str)
+                else:
+                    logger.warning(
+                        f"Skipping child link with invalid href dict content in root catalog during list: {link}"
+                    )
+            # Add handling for legacy string format if necessary/desired
+            # elif isinstance(href_obj, str) and href_obj.startswith("/ipfs/"): ...
+            else:
+                logger.warning(
+                    f"Skipping invalid child link format in root catalog during list: {link}"
+                )
+
+    if not collections_to_visit:
+        logger.warning(
+            f"No child collection links found in root catalog {root_catalog_ipns} during list."
+        )
+        return []  # Return empty list if no collections to check
+
+    logger.info(f"Found {len(collections_to_visit)} collections to scan for items.")
 
     for collection_cid in collections_to_visit:
         try:
-            # *** Use fetch_json_from_cid ***
+            # *** Use fetch_json_from_cid with the extracted CID string ***
             collection = fetch_json_from_cid(collection_cid, ipfs_store)
+
             if (
                 not isinstance(collection, dict)
                 or collection.get("type") != "Collection"
             ):
                 logger.warning(
-                    f"Skipping invalid collection format during list (CID: {collection_cid})"
+                    f"Skipping invalid collection format during list (CID: {collection_cid}). Type: {collection.get('type')}"
                 )
                 continue
 
             for link in collection.get("links", []):
                 if link.get("rel") == "item" and link.get("type") == "application/json":
-                    href = link.get("href")
-                    if href and href.startswith("/ipfs/"):
-                        item_cid = href[6:]
+                    item_href_obj = link.get("href")
+                    item_cid = None
+
+                    # *** MODIFIED: Handle dict href for item links ***
+                    if isinstance(item_href_obj, dict):
+                        item_cid = item_href_obj.get("/")
+                    # Add handling for legacy string format if necessary/desired
+                    # elif isinstance(item_href_obj, str) and item_href_obj.startswith("/ipfs/"): ...
+                    else:
+                        logger.warning(
+                            f"Skipping invalid item link format in collection {collection_cid} during list: {link}"
+                        )
+                        continue
+
+                    if isinstance(item_cid, str):
                         try:
-                            # *** Use fetch_json_from_cid ***
+                            # Fetch item JSON *only* to get the ID and cache the HAMT CID
+                            # Avoids deeper processing if only listing
                             item = fetch_json_from_cid(item_cid, ipfs_store)
+
                             if (
                                 not isinstance(item, dict)
                                 or item.get("type") != "Feature"
                             ):
                                 logger.warning(
-                                    f"Skipping invalid item format during list (CID: {item_cid})"
+                                    f"Skipping invalid item format during list (CID: {item_cid}). Type: {item.get('type')}"
                                 )
                                 continue
 
                             item_id = item.get("id")
-                            if item_id:
-                                dataset_ids.add(item_id)
+                            if isinstance(item_id, str) and item_id:
+                                dataset_ids.add(item_id)  # Add valid ID to our set
+
+                                # Populate cache as a side effect
                                 hamt_asset = item.get("assets", {}).get("hamt-zarr", {})
                                 hamt_cid_href = hamt_asset.get("href")
                                 if (
                                     item_id not in _stac_hamt_cid_cache
-                                    and hamt_cid_href
+                                    and isinstance(hamt_cid_href, str)
                                     and hamt_cid_href.startswith("/ipfs/")
                                 ):
                                     hamt_cid_str = hamt_cid_href[6:]
@@ -696,25 +860,34 @@ def list_datasets(
                                     logger.debug(
                                         f"Cached HAMT CID {hamt_cid_str} for {item_id} during list."
                                     )
+                            else:
+                                logger.warning(
+                                    f"Item {item_cid} has missing or invalid 'id'. Skipping."
+                                )
 
                         except (StacCatalogError, IpfsConnectionError) as item_err:
+                            # Log and skip this specific item if fetching/parsing fails
                             logger.warning(
                                 f"Skipping item {item_cid} during list due to error: {item_err}"
                             )
-                        except Exception as item_err:
+                        except Exception as item_err:  # Catch unexpected errors
                             logger.warning(
-                                f"Skipping item {item_cid} during list due to unexpected error: {item_err}"
+                                f"Skipping item {item_cid} during list due to unexpected error: {type(item_err).__name__}: {item_err}"
                             )
-                    # else: Skipping invalid item link
+                    # else: Invalid item CID extracted, already logged warning
 
         except (StacCatalogError, IpfsConnectionError) as col_err:
+            # Log and skip this specific collection if fetching/parsing fails
             logger.warning(
                 f"Skipping collection {collection_cid} during list due to error: {col_err}"
             )
-        except Exception as col_err:
+        except Exception as col_err:  # Catch unexpected errors
             logger.warning(
-                f"Skipping collection {collection_cid} during list due to unexpected error: {col_err}"
+                f"Skipping collection {collection_cid} during list due to unexpected error: {type(col_err).__name__}: {col_err}"
             )
 
-    logger.info(f"Found {len(dataset_ids)} unique datasets in STAC catalog.")
-    return sorted(list(dataset_ids))
+    found_datasets = sorted(list(dataset_ids))
+    logger.info(
+        f"Finished listing datasets. Found {len(found_datasets)} unique dataset IDs."
+    )
+    return found_datasets

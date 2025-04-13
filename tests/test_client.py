@@ -15,9 +15,14 @@ from dclimate_zarr_client.dclimate_zarr_errors import (
     NoDataFoundError,
     ConflictingAggregationRequestError,
     InvalidExportFormatError,
-    InvalidForecastRequestError,
+    InvalidForecastRequestError,  # Add for IPFS errors
 )
 from xarray.core.variable import MissingDimensionsError
+
+# Import constants from conftest
+
+# --- Test Markers ---
+pytestmark = pytest.mark.client  # Mark tests specific to the client module
 
 SAMPLE_ZARRS = pathlib.Path(__file__).parent / "etc" / "sample_zarrs"
 

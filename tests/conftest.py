@@ -3,6 +3,7 @@ import itertools
 import pathlib
 
 import geopandas as gpd
+import os
 import numpy as np
 import pytest
 import xarray as xr
@@ -95,3 +96,54 @@ def dataset():
 @pytest.fixture
 def single_var_dataset():
     return make_dataset(vars=1)
+
+
+# --- Add IPFS Connection Check Fixture ---
+# We need the check_ipfs_connection fixture available for multiple test files
+# Let's reuse the one from test_integration_ipfs.py
+
+
+@pytest.fixture(scope="session")  # Changed scope to session for efficiency
+def ipfs_gateway_url():
+    """Returns the IPFS gateway URL to check."""
+    # Prioritize environment variable, then default
+    return os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
+
+
+def is_ipfs_running(gateway_url: str) -> bool:
+    """Check if IPFS daemon Gateway is responsive."""
+    import requests  # Import locally to avoid dependency if not used
+
+    try:
+        # Check gateway root or /ipfs/ path - depends on gateway config
+        # Let's try a known immutable path
+        known_cid = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m"  # Example file
+        response = requests.head(f"{gateway_url}/ipfs/{known_cid}", timeout=5)
+        # Allow 200 OK or 404 Not Found (if CID isn't locally available but gateway is up)
+        # Avoid checking strict 200 as CID might not be pinned locally but gateway is running
+        print(f"IPFS check response code: {response.status_code}")
+        return response.status_code < 500
+    except requests.exceptions.RequestException as e:
+        print(f"IPFS check failed: {e}")
+        return False
+
+
+@pytest.fixture(scope="session", autouse=True)  # Changed scope to session
+def check_ipfs_connection(ipfs_gateway_url):
+    """Skips integration tests if IPFS daemon Gateway is not accessible."""
+    if not is_ipfs_running(ipfs_gateway_url):
+        pytest.skip(
+            f"IPFS daemon Gateway not responding at {ipfs_gateway_url}. Skipping integration tests."
+        )
+    else:
+        print(
+            f"IPFS daemon Gateway responding at {ipfs_gateway_url}. Proceeding with integration tests."
+        )
+
+
+# Define known dataset IDs accessible via STAC for tests
+KNOWN_STAC_DATASET_ID = "cpc-precip-conus"
+KNOWN_STAC_DATASET_VAR = "precip"
+KNOWN_STAC_COORD_LAT = 40.875
+KNOWN_STAC_COORD_LON = -104.875
+KNOWN_STAC_DATE = datetime.datetime(2023, 1, 1)
