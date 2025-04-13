@@ -7,6 +7,7 @@ import os
 import numpy as np
 import pytest
 import xarray as xr
+import requests  # Import requests here for the check
 import zarr
 import zarr.storage
 
@@ -17,12 +18,14 @@ SAMPLE_ZARRS = ETC / "sample_zarrs"
 
 @pytest.fixture
 def input_ds():
+    # Keeping local fixtures for tests that don't need IPFS loading (like test_geotemporal_data)
     with zarr.storage.ZipStore(ETC / "retrieval_test.zip", mode="r") as in_zarr:
         return xr.open_zarr(in_zarr, chunks=None).compute()
 
 
 @pytest.fixture
 def forecast_ds():
+    # Keeping local fixtures for tests that don't need IPFS loading
     with zarr.storage.ZipStore(
         ETC / "forecast_retrieval_test.zip", mode="r"
     ) as in_zarr:
@@ -106,31 +109,49 @@ def single_var_dataset():
 @pytest.fixture(scope="session")  # Changed scope to session for efficiency
 def ipfs_gateway_url():
     """Returns the IPFS gateway URL to check."""
-    # Prioritize environment variable, then default
+    # Prioritize environment variable, then default from py-hamt's IPFSStore
     return os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
 
 
 def is_ipfs_running(gateway_url: str) -> bool:
     """Check if IPFS daemon Gateway is responsive."""
-    import requests  # Import locally to avoid dependency if not used
 
     try:
         # Check gateway root or /ipfs/ path - depends on gateway config
-        # Let's try a known immutable path
+        # A lightweight check: try to access the root or a known path
+        # Use a known immutable CID (e.g., the empty directory CID)
+        # Let's try a known immutable path: "Hello from IPFS Gateway Checker"
         known_cid = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m"  # Example file
-        response = requests.head(f"{gateway_url}/ipfs/{known_cid}", timeout=5)
+        response = requests.head(
+            f"{gateway_url.rstrip('/')}/ipfs/{known_cid}", timeout=5
+        )
         # Allow 200 OK or 404 Not Found (if CID isn't locally available but gateway is up)
         # Avoid checking strict 200 as CID might not be pinned locally but gateway is running
-        print(f"IPFS check response code: {response.status_code}")
-        return response.status_code < 500
+        if response.status_code < 500:
+            print(
+                f"IPFS Gateway check successful (Status: {response.status_code}) at {gateway_url}"
+            )
+            return True
+        else:
+            print(
+                f"IPFS Gateway check failed (Status: {response.status_code}) at {gateway_url}"
+            )
+            return False
+    except requests.exceptions.ConnectionError:
+        print(f"IPFS Gateway connection failed at {gateway_url}")
+        return False
+    except requests.exceptions.Timeout:
+        print(f"IPFS Gateway check timed out at {gateway_url}")
+        return False
     except requests.exceptions.RequestException as e:
-        print(f"IPFS check failed: {e}")
+        print(f"IPFS Gateway check failed with unexpected error: {e}")
         return False
 
 
-@pytest.fixture(scope="session", autouse=True)  # Changed scope to session
+# Apply autouse=True to run this check once for the session for all tests
+@pytest.fixture(scope="session", autouse=True)
 def check_ipfs_connection(ipfs_gateway_url):
-    """Skips integration tests if IPFS daemon Gateway is not accessible."""
+    """Skips tests if IPFS daemon Gateway is not accessible."""
     if not is_ipfs_running(ipfs_gateway_url):
         pytest.skip(
             f"IPFS daemon Gateway not responding at {ipfs_gateway_url}. Skipping integration tests."
@@ -143,7 +164,14 @@ def check_ipfs_connection(ipfs_gateway_url):
 
 # Define known dataset IDs accessible via STAC for tests
 KNOWN_STAC_DATASET_ID = "cpc-precip-conus"
+KNOWN_STAC_DATASET_ID_2 = "chirps-final-p05"
 KNOWN_STAC_DATASET_VAR = "precip"
 KNOWN_STAC_COORD_LAT = 40.875
 KNOWN_STAC_COORD_LON = -104.875
 KNOWN_STAC_DATE = datetime.datetime(2023, 1, 1)
+KNOWN_STAC_DATE_END = datetime.datetime(2023, 1, 5)
+
+# Known dataset for forecast tests (if applicable and available via STAC)
+# If no suitable forecast dataset is guaranteed via STAC, skip forecast tests or mock them
+# KNOWN_STAC_FORECAST_ID = "gfs-temperature-forecast" # Fictional example
+KNOWN_STAC_FORECAST_ID = None  # Set to None if no reliable forecast dataset via STAC
