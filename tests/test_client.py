@@ -104,7 +104,7 @@ def patched_get_dataset_from_s3(dataset_name: str, bucket_name: str) -> xr.Datas
     except Exception as e:
         raise ValueError(
             f"Failed to load test Zarr from {zip_path} for dataset '{dataset_name}': {type(e).__name__} - {e}"
-        )
+        ) from e
 
 
 # --- Fixture using the updated patch ---
