@@ -497,8 +497,7 @@ class GeotemporalData:
         _check_input_parameters(agg_method=agg_method)
         # Aggregate by the specified method over the specified rolling window length
         rolled = self.data.rolling(time=window_size)
-        aggregator = getattr(xr.core.rolling.DatasetRolling, agg_method)
-        rolled_agg = aggregator(rolled, keep_attrs=True).dropna("time")
+        rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).dropna("time")
         # remove NAs at beginning/end of array where window size is not large enough to
         # compute a value
 
