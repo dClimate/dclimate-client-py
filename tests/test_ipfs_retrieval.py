@@ -1,9 +1,11 @@
 import os
 import json
+from typing import Dict, Any  # Import Dict and Any
+from unittest.mock import patch, mock_open, MagicMock
 
 import pytest
 import requests
-from unittest.mock import patch, mock_open
+from multiformats import CID  # Import CID
 
 import dclimate_zarr_client.ipfs_retrieval as ipfs_retrieval
 from dclimate_zarr_client.ipfs_retrieval import (
@@ -13,7 +15,12 @@ from dclimate_zarr_client.ipfs_retrieval import (
     DatasetNotFoundError,
     IpfsConnectionError,
     StacCatalogError,
+    # Import internal functions for testing
+    _get_ipfs_store,
+    fetch_json_from_cid,  # noqa: E402 Testing private member
+    _get_host,  # noqa: E402 Testing private member
 )
+from py_hamt import IPFSStore  # Import IPFSStore
 
 
 # import xarray as xr
@@ -24,6 +31,218 @@ from .conftest import KNOWN_STAC_DATASET_ID, KNOWN_STAC_DATASET_ID_2
 # Apply IPFS check fixture to relevant tests/module
 
 pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
+
+
+# --- Type Hinting --- # Define type alias if needed, or use directly
+MonkeyPatch = pytest.MonkeyPatch  # Common practice for pytest
+MockIPFSStore = MagicMock  # Alias for clarity
+
+
+# --- Tests for _get_ipfs_store ---
+
+
+def test_get_ipfs_store_defaults(monkeypatch: MonkeyPatch):
+    """Test store creation uses defaults when no args/env vars are set."""
+    monkeypatch.delenv("IPFS_GATEWAY_URI_STEM", raising=False)
+    monkeypatch.delenv("IPFS_RPC_URI_STEM", raising=False)
+    with patch("dclimate_zarr_client.ipfs_retrieval.IPFSStore") as mock_store_class:
+        store = _get_ipfs_store()
+        mock_store_class.assert_called_once_with()  # Called with no args, uses internal defaults
+        assert isinstance(
+            store, MagicMock
+        )  # We mocked the class, so instance is MagicMock
+
+
+def test_get_ipfs_store_args_override_env(monkeypatch: MonkeyPatch):
+    """Test that function arguments override environment variables."""
+    monkeypatch.setenv("IPFS_GATEWAY_URI_STEM", "http://env-gateway:8080")
+    monkeypatch.setenv("IPFS_RPC_URI_STEM", "http://env-rpc:5001")
+    with patch("dclimate_zarr_client.ipfs_retrieval.IPFSStore") as mock_store_class:
+        store = _get_ipfs_store(
+            gateway_uri_stem="http://arg-gateway:8080",
+            rpc_uri_stem="http://arg-rpc:5001",
+        )
+        mock_store_class.assert_called_once_with(
+            gateway_uri_stem="http://arg-gateway:8080",
+            rpc_uri_stem="http://arg-rpc:5001",
+        )
+        assert isinstance(store, MagicMock)
+
+
+def test_get_ipfs_store_env_vars(monkeypatch: MonkeyPatch):
+    """Test that environment variables are used when no args are provided."""
+    monkeypatch.setenv("IPFS_GATEWAY_URI_STEM", "http://env-gateway:8080")
+    monkeypatch.setenv("IPFS_RPC_URI_STEM", "http://env-rpc:5001")
+    with patch("dclimate_zarr_client.ipfs_retrieval.IPFSStore") as mock_store_class:
+        store = _get_ipfs_store()
+        mock_store_class.assert_called_once_with(
+            gateway_uri_stem="http://env-gateway:8080",
+            rpc_uri_stem="http://env-rpc:5001",
+        )
+        assert isinstance(store, MagicMock)
+
+
+def test_get_ipfs_store_mixed_args_env(monkeypatch: MonkeyPatch):
+    """Test using a mix of args and env vars (args should take precedence)."""
+    monkeypatch.setenv("IPFS_GATEWAY_URI_STEM", "http://env-gateway:8080")
+    monkeypatch.delenv("IPFS_RPC_URI_STEM", raising=False)  # RPC not set in env
+    with patch("dclimate_zarr_client.ipfs_retrieval.IPFSStore") as mock_store_class:
+        store = _get_ipfs_store(
+            rpc_uri_stem="http://arg-rpc:5001"
+        )  # Provide RPC as arg
+        mock_store_class.assert_called_once_with(
+            gateway_uri_stem="http://env-gateway:8080",  # Gateway comes from env
+            rpc_uri_stem="http://arg-rpc:5001",  # RPC comes from arg
+        )
+        assert isinstance(store, MagicMock)
+
+
+# --- Tests for fetch_json_from_cid ---
+
+
+@pytest.fixture
+def mock_ipfs_store() -> MockIPFSStore:
+    """Fixture to create a mock IPFSStore instance."""
+    store = MagicMock(spec=IPFSStore)
+    # Set default URIs for error messages if needed
+    store.gateway_uri_stem = "http://mock-gateway:8080"
+    store.rpc_uri_stem = "http://mock-rpc:5001"
+    return store
+
+
+def test_fetch_json_from_cid_success(mock_ipfs_store: MockIPFSStore):
+    """Test successful fetching and decoding of JSON from CID."""
+    valid_cid_str = (
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"  # Example CID
+    )
+    json_data: Dict[str, Any] = {"key": "value"}
+    mock_ipfs_store.load.return_value = json.dumps(json_data).encode("utf-8")
+
+    result: Dict[str, Any] = fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+
+    assert result == json_data
+    mock_ipfs_store.load.assert_called_once()
+    # Check that CID.decode was implicitly called by store.load mock (or explicitly if store expects CID obj)
+    # For MagicMock, we check the arg type if needed, assuming it passes the string
+    call_args = mock_ipfs_store.load.call_args[0]
+    assert isinstance(call_args[0], CID)
+    assert str(call_args[0]) == valid_cid_str
+
+
+def test_fetch_json_from_cid_success_with_prefix(mock_ipfs_store: MockIPFSStore):
+    """Test successful fetching when CID string has /ipfs/ prefix."""
+    cid_str_no_prefix = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    cid_str_with_prefix = f"/ipfs/{cid_str_no_prefix}"
+    json_data: Dict[str, Any] = {"key": "value"}
+    mock_ipfs_store.load.return_value = json.dumps(json_data).encode("utf-8")
+
+    result: Dict[str, Any] = fetch_json_from_cid(cid_str_with_prefix, mock_ipfs_store)
+
+    assert result == json_data
+    mock_ipfs_store.load.assert_called_once()
+    call_args = mock_ipfs_store.load.call_args[0]
+    assert isinstance(call_args[0], CID)
+    assert str(call_args[0]) == cid_str_no_prefix  # Prefix should be stripped
+
+
+def test_fetch_json_from_cid_invalid_cid_string(mock_ipfs_store: MockIPFSStore):
+    """Test StacCatalogError when CID string is invalid."""
+    invalid_cid_str = "this-is-not-a-cid"
+    with pytest.raises(
+        StacCatalogError, match=f"Failed to decode CID string '{invalid_cid_str}'"
+    ):
+        fetch_json_from_cid(invalid_cid_str, mock_ipfs_store)
+    mock_ipfs_store.load.assert_not_called()  # Should fail before calling load
+
+
+def test_fetch_json_from_cid_load_returns_none(mock_ipfs_store: MockIPFSStore):
+    """Test StacCatalogError when ipfs_store.load returns None or empty bytes."""
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    mock_ipfs_store.load.return_value = b""  # Empty bytes
+
+    with pytest.raises(
+        StacCatalogError, match=f"No data returned for CID: {valid_cid_str}"
+    ):
+        fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+    mock_ipfs_store.load.assert_called_once()
+
+
+def test_fetch_json_from_cid_json_decode_error(mock_ipfs_store: MockIPFSStore):
+    """Test StacCatalogError when fetched data is not valid JSON."""
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    mock_ipfs_store.load.return_value = b"this is not json"
+
+    with pytest.raises(
+        StacCatalogError, match=f"Failed to decode JSON from CID {valid_cid_str}"
+    ):
+        fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+    mock_ipfs_store.load.assert_called_once()
+
+
+def test_fetch_json_from_cid_timeout_error(mock_ipfs_store: MockIPFSStore):
+    """Test IpfsConnectionError when ipfs_store.load raises Timeout."""
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    mock_ipfs_store.load.side_effect = requests.exceptions.Timeout("Request timed out")
+
+    with pytest.raises(
+        IpfsConnectionError, match=f"Timeout fetching CID {valid_cid_str}"
+    ):
+        fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+    mock_ipfs_store.load.assert_called_once()
+
+
+def test_fetch_json_from_cid_connection_error(mock_ipfs_store: MockIPFSStore):
+    """Test IpfsConnectionError when ipfs_store.load raises connection-related error."""
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    # Simulate different connection error messages
+    errors_to_test = [
+        requests.exceptions.ConnectionError("Connection refused"),
+        requests.exceptions.RequestException("Max retries exceeded"),
+        requests.exceptions.RequestException("Failed to establish a new connection"),
+    ]
+    for error in errors_to_test:
+        mock_ipfs_store.load.side_effect = error
+        with pytest.raises(
+            IpfsConnectionError,
+            match=f"Failed to connect via IPFSStore.*to fetch CID {valid_cid_str}",
+        ):
+            fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+        mock_ipfs_store.load.assert_called_once()
+        mock_ipfs_store.load.reset_mock()  # Reset mock for next error in loop
+
+
+def test_fetch_json_from_cid_generic_load_error(mock_ipfs_store: MockIPFSStore):
+    """Test StacCatalogError for other exceptions during ipfs_store.load."""
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    mock_ipfs_store.load.side_effect = RuntimeError("Some other IPFSStore error")
+
+    with pytest.raises(
+        StacCatalogError,
+        match=f"Error fetching data for CID {valid_cid_str} via IPFSStore",
+    ):
+        fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
+    mock_ipfs_store.load.assert_called_once()
+
+
+# --- Tests for _get_host ---
+
+
+def test_get_host_default():
+    """Test _get_host uses the default localhost when env var is not set."""
+    # Import DEFAULT_HOST to use in assertion
+    from dclimate_zarr_client.ipfs_retrieval import DEFAULT_HOST
+
+    with patch.dict(os.environ, {}, clear=True):  # Ensure env var is not set
+        assert _get_host() == DEFAULT_HOST  # Check default URI
+        # If IPFS_HOST is not set, _get_host IGNORES the uri argument and returns DEFAULT_HOST
+        assert _get_host("/custom/uri") == DEFAULT_HOST
+
+
+def test_get_host_from_env(monkeypatch: MonkeyPatch):
+    """Test _get_host uses IPFS_HOST environment variable."""
+    monkeypatch.setenv("IPFS_HOST", "http://my-ipfs-node:5002")
+    assert _get_host() == "http://my-ipfs-node:5002/api/v0"
+    assert _get_host("/other/uri") == "http://my-ipfs-node:5002/other/uri"
 
 
 # --- Tests for get_ipns_name_hash (Legacy/Utility Function) ---
@@ -245,21 +464,6 @@ def test_list_datasets_functional():
 #                 assert "Failed to retrieve dataset list" in str(exc.value)
 
 
-# def test_list_datasets_local_cache_empty():
-#     """
-#     Test that if the endpoint fails AND local cache file is empty,
-#     list_datasets() raises RuntimeError (no data to parse).
-#     """
-#     with patch("requests.get") as mock_requests_get:
-#         mock_requests_get.side_effect = requests.RequestException("Simulated error")
-
-#         with patch("os.path.exists", return_value=True):
-#             with patch("builtins.open", mock_open(read_data="")):
-#                 with pytest.raises(RuntimeError) as exc:
-#                     list_datasets()
-#                 assert "Failed to retrieve dataset list" in str(exc.value)
-
-
 # def test_geo_temporal_query():
 #     ds_bytes = geo_temporal_query(
 #         "cpc-precip-conus",
@@ -312,14 +516,28 @@ def get_cache_path():
     return os.path.join(package_dir, "cids.json")
 
 
+# --- Helper Functions for Mocking --- #
+
+
+def mock_exists_true(*args, **kwargs) -> bool:
+    return True
+
+
+def mock_exists_false(*args, **kwargs) -> bool:
+    return False
+
+
 # Use monkeypatch fixture for modifying builtins like open
-def test_update_cache_no_update(monkeypatch):
+def test_update_cache_no_update(monkeypatch: MonkeyPatch):
     cached_data = {"dataset": "hash1"}
     new_data = {"dataset": "hash1"}
     file_path = get_cache_path()
 
+    # Mock os.path.exists needed if called before open
+    monkeypatch.setattr("os.path.exists", mock_exists_true)
+
     m = mock_open(read_data=json.dumps(cached_data))
-    monkeypatch.setattr("builtins.open", m)
+    monkeypatch.setattr("builtins.open", m)  # Correct: Patch built-in open
 
     update_cache_if_changed(new_data)
 
@@ -327,13 +545,17 @@ def test_update_cache_no_update(monkeypatch):
     m.assert_called_once_with(file_path, "r")
 
 
-def test_update_cache_update(monkeypatch):
+def test_update_cache_update(monkeypatch: MonkeyPatch):
     cached_data = {"dataset": "hash1"}
     new_data = {"dataset": "hash2"}
     file_path = get_cache_path()
 
+    # Mock os.path.exists needed if called before open
+    monkeypatch.setattr("os.path.exists", mock_exists_true)
+
     m = mock_open(read_data=json.dumps(cached_data))
-    monkeypatch.setattr("builtins.open", m)
+    # Patch open in the correct namespace where it's called
+    monkeypatch.setattr("builtins.open", m)  # Correct: Patch built-in open
 
     update_cache_if_changed(new_data)
 
@@ -342,21 +564,28 @@ def test_update_cache_update(monkeypatch):
     calls = m.call_args_list
     assert calls[0].args == (file_path, "r")
     assert calls[1].args == (file_path, "w")
-    # Remove the assertion checking the specific write content
-    # handle = m() # Remove this
-    # handle.write.assert_called_once_with(json.dumps(new_data)) # Remove this
+    # Check the content written (optional, but good practice)
+    # Ensure the mock handle captures the write
+    # Note: mock_open's write checking can be tricky.
+    # A simpler check is often sufficient unless exact content is critical.
+    # handle = m()
+    # handle.write.assert_called_once_with(json.dumps(new_data))
 
 
-def test_update_cache_file_not_found(monkeypatch):
+def test_update_cache_file_not_found(monkeypatch: MonkeyPatch):
     new_data = {"dataset": "hash2"}
     file_path = get_cache_path()
 
+    # No need to mock os.path.exists as the function doesn't use it
+
     # Mock 'open' to raise FileNotFoundError on first call (read), succeed on second (write)
-    # Create a mock handle instance for the successful write call return value
     mock_write_handle = mock_open().return_value
     m = mock_open()
-    m.side_effect = [FileNotFoundError, mock_write_handle]  # Read fails, Write succeeds
-    monkeypatch.setattr("builtins.open", m)
+    # First call (open "r") raises FileNotFoundError
+    # Second call (open "w") returns the mock handle
+    m.side_effect = [FileNotFoundError, mock_write_handle]
+    # Patch open in the correct namespace
+    monkeypatch.setattr("builtins.open", m)  # Correct: Patch built-in open
 
     update_cache_if_changed(new_data)
 
@@ -365,15 +594,18 @@ def test_update_cache_file_not_found(monkeypatch):
     calls = m.call_args_list
     assert calls[0].args == (file_path, "r")
     assert calls[1].args == (file_path, "w")
-    # Remove the lines trying to get handle and assert write
-    # handle = m() # Remove this
-    # handle.write.assert_called_once_with(json.dumps(new_data)) # Remove this
+    # Optionally check write content if needed:
+    # handle = calls[1]._extract_mock_return_value() # Get the handle returned by the 2nd call
+    # handle.write.assert_called_once_with(json.dumps(new_data))
 
 
-def test_update_cache_decode_error(monkeypatch):
+def test_update_cache_decode_error(monkeypatch: MonkeyPatch):
     """Test when the existing cache file has invalid JSON."""
     new_data = {"dataset": "hash2"}
     file_path = get_cache_path()
+
+    # Mock os.path.exists needed if called before open
+    monkeypatch.setattr("os.path.exists", mock_exists_true)
 
     # Create separate mock handles for read and write attempts
     # The read handle will simulate having invalid data
@@ -383,16 +615,18 @@ def test_update_cache_decode_error(monkeypatch):
     m = mock_open()
     # Define side effect: return read_handle on first call, write_handle on second
     m.side_effect = [read_handle, write_handle]
+    # Patch open in the correct namespace
+    monkeypatch.setattr("builtins.open", m)  # Correct: Patch built-in open
 
     # Mock json.load to raise error when the read_handle is passed to it
     # Patch it in the correct namespace where it's used
     mock_json_load = patch(
-        "dclimate_zarr_client.ipfs_retrieval.json.load",
+        "json.load",  # Patching built-in json directly
         side_effect=json.JSONDecodeError("err", "doc", 0),
-    ).start()
+    ).start()  # No need for .start()/.stop() if using 'with patch(...)'
 
-    monkeypatch.setattr("builtins.open", m)
-
+    # Use 'with patch' for cleaner setup/teardown
+    # with patch("json.load", side_effect=json.JSONDecodeError("err", "doc", 0)):
     update_cache_if_changed(new_data)
 
     # Assert open was called twice: read attempt (failed decode), write attempt
@@ -401,5 +635,59 @@ def test_update_cache_decode_error(monkeypatch):
     assert calls[0].args == (file_path, "r")  # Read attempt
     assert calls[1].args == (file_path, "w")  # Write attempt
 
-    # Clean up the patch for json.load
+    # Clean up the patch for json.load if using start/stop
     mock_json_load.stop()
+
+
+# --- Test Legacy get_ipns_name_hash Errors ---
+# (Ensure these cover JSONDecodeError during fallback read)
+
+
+def test_get_ipns_name_hash_local_cache_malformed_json_during_fallback():
+    """Test DatasetNotFoundError when local cache read fails during fallback"""
+    with patch(
+        "requests.get", side_effect=requests.RequestException("Simulated error")
+    ):
+        with patch("os.path.exists", return_value=True):
+            # Mock update_cache_if_changed to avoid file writes during test setup if called early
+            with patch("dclimate_zarr_client.ipfs_retrieval.update_cache_if_changed"):
+                # Mock open specifically within the fallback block
+                with patch(
+                    "dclimate_zarr_client.ipfs_retrieval.open",
+                    mock_open(read_data="INVALID JSON!!"),
+                    create=True,  # Allow create=True if needed by mock_open internals
+                ) as mock_file_open:
+                    # Mock json.load raising the error when called by get_ipns_name_hash
+                    with patch(
+                        "json.load", side_effect=json.JSONDecodeError("err", "doc", 0)
+                    ):
+                        with pytest.raises(
+                            DatasetNotFoundError, match="Invalid dataset name"
+                        ):
+                            get_ipns_name_hash("cpc-precip-conus")
+                    # Assert the mocked open was called for reading the cache
+                    mock_file_open.assert_called_once_with(get_cache_path(), "r")
+
+
+def test_get_ipns_name_hash_local_cache_empty_during_fallback():
+    """Test DatasetNotFoundError when local cache is empty during fallback"""
+    with patch(
+        "requests.get", side_effect=requests.RequestException("Simulated error")
+    ):
+        with patch("os.path.exists", return_value=True):
+            with patch("dclimate_zarr_client.ipfs_retrieval.update_cache_if_changed"):
+                with patch(
+                    "dclimate_zarr_client.ipfs_retrieval.open",
+                    mock_open(read_data=""),  # Empty file
+                    create=True,
+                ) as mock_file_open:
+                    # json.load will raise JSONDecodeError on empty string
+                    with patch(
+                        "json.load",
+                        side_effect=json.JSONDecodeError("Expecting value", "", 0),
+                    ):
+                        with pytest.raises(
+                            DatasetNotFoundError, match="Invalid dataset name"
+                        ):
+                            get_ipns_name_hash("cpc-precip-conus")
+                    mock_file_open.assert_called_once_with(get_cache_path(), "r")
