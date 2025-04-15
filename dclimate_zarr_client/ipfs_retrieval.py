@@ -185,7 +185,6 @@ def fetch_json_from_ipns(
         last_error = StacCatalogError(
             f"Unexpected error (nocache=true): {type(e).__name__}: {e}"
         )
-
     # --- Attempt 2: GET without nocache (if Attempt 1 failed) ---
     logger.info(
         f"Retrying fetch JSON via Gateway GET without nocache for: {ipns_name_for_url}"
@@ -204,20 +203,34 @@ def fetch_json_from_ipns(
             allow_redirects=True,
         )  # Retry
         response.raise_for_status()
-        json_content = response.json()
+        json_content = response.json()  # This call may raise JSONDecodeError
         logger.info(
             f"Successfully fetched JSON from IPNS '{ipns_name}' (nocache=false)"
         )
         return json_content
 
+    except json.JSONDecodeError as e:
+        # Handle JSON decode errors explicitly on the retry attempt.
+        response_text = response.text[:500] if response else "[No Response]"
+        status_code = response.status_code if response else "[No Status]"
+        err_msg = (
+            f"Invalid JSON fetching IPNS '{ipns_name}' (retry) via Gateway {gateway_base}: {e}. "
+            f"Response text: {response_text[:100]}"
+        )
+        if last_error:
+            err_msg += f" | Initial error (nocache=true): {type(last_error).__name__}: {last_error}"
+        raise StacCatalogError(err_msg) from e
+
     except requests.exceptions.ConnectionError as e:
         raise IpfsConnectionError(
             f"Connection error during IPNS fetch retry for '{ipns_name}' via Gateway {gateway_base}. Details: {e}"
         ) from e
+
     except requests.exceptions.Timeout as e:
         raise IpfsConnectionError(
             f"Timeout ({timeout}s) during IPNS fetch retry for '{ipns_name}' via Gateway {gateway_base}."
         ) from e
+
     except requests.exceptions.RequestException as e:  # Includes HTTP errors on retry
         err_msg = (
             f"Error fetching IPNS '{ipns_name}' (retry) via Gateway {gateway_base}: {e}"
@@ -233,16 +246,10 @@ def fetch_json_from_ipns(
             err_msg += f" Status Code: {status_code}, Response: {response_text}"
         if last_error:
             err_msg += f" | Initial error (nocache=true): {type(last_error).__name__}: {last_error}"
-        raise StacCatalogError(
-            err_msg
-        ) from e  # Raise as StacCatalogError as it prevents catalog reading
-    except json.JSONDecodeError as e:
-        err_msg = f"Invalid JSON fetching IPNS '{ipns_name}' (retry) via Gateway {gateway_base}: {e}. Response text: {response.text[:500] if response else '[No Response]'}"
-        if last_error:
-            err_msg += f" | Initial error (nocache=true): {type(last_error).__name__}: {last_error}"
         raise StacCatalogError(err_msg) from e
-    except Exception as e:  # Catch any other unexpected error during retry
-        err_msg = f"Unexpected error during IPNS fetch retry for '{ipns_name}' via Gateway: {e}"
+
+    except Exception as e:  # Catch any other unexpected exceptions
+        err_msg = f"Unexpected error during IPNS fetch retry for '{ipns_name}' via Gateway {gateway_base}: {e}"
         if last_error:
             err_msg += f" | Initial error (nocache=true): {type(last_error).__name__}: {last_error}"
         raise StacCatalogError(err_msg) from e

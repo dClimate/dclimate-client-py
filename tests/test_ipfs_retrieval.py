@@ -9,7 +9,7 @@ from multiformats import CID  # Import CID
 
 import dclimate_zarr_client.ipfs_retrieval as ipfs_retrieval
 from dclimate_zarr_client.ipfs_retrieval import (
-    # Keep imports for functions still tested here
+    fetch_json_from_ipns,
     get_ipns_name_hash,
     update_cache_if_changed,
     DatasetNotFoundError,
@@ -22,20 +22,42 @@ from dclimate_zarr_client.ipfs_retrieval import (
 )
 from py_hamt import IPFSStore  # Import IPFSStore
 
-
-# import xarray as xr
-
 # Import constants/configs
 from dclimate_zarr_client.client import DCLIMATE_STAC_CATALOG_IPNS
 from .conftest import KNOWN_STAC_DATASET_ID, KNOWN_STAC_DATASET_ID_2
-# Apply IPFS check fixture to relevant tests/module
 
-pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
+# Apply IPFS check fixture ONLY to tests that actually need functional IPFS
+# Most tests in this file should be mocked unit tests.
+# pytestmark = pytest.mark.usefixtures("check_ipfs_connection") # Remove module-level mark
+
+# --- Type Hinting ---
+MonkeyPatch = pytest.MonkeyPatch
+MockIPFSStore = MagicMock
+MockResponse = MagicMock  # Alias for requests.Response mock
 
 
-# --- Type Hinting --- # Define type alias if needed, or use directly
-MonkeyPatch = pytest.MonkeyPatch  # Common practice for pytest
-MockIPFSStore = MagicMock  # Alias for clarity
+# --- Fixtures ---
+@pytest.fixture
+def mock_ipfs_store() -> MockIPFSStore:
+    """Fixture to create a mock IPFSStore instance."""
+    store = MagicMock(spec=IPFSStore)
+    store.gateway_uri_stem = "http://mock-gateway:8080"
+    store.rpc_uri_stem = "http://mock-rpc:5001"
+    return store
+
+
+@pytest.fixture
+def mock_requests_get(mocker) -> MagicMock:
+    """Fixture to mock requests.get."""
+    return mocker.patch("requests.get")
+
+
+# --- Helper to get cache path ---test_get_ipfs_store_defaults
+def get_cache_path():
+    # Helper to get the expected cache file path within the package
+    # Need to ensure this reflects the actual location used by the code
+    package_dir = os.path.dirname(ipfs_retrieval.__file__)
+    return os.path.join(package_dir, "cids.json")
 
 
 # --- Tests for _get_ipfs_store ---
@@ -97,29 +119,15 @@ def test_get_ipfs_store_mixed_args_env(monkeypatch: MonkeyPatch):
         assert isinstance(store, MagicMock)
 
 
-# --- Tests for fetch_json_from_cid ---
-
-
-@pytest.fixture
-def mock_ipfs_store() -> MockIPFSStore:
-    """Fixture to create a mock IPFSStore instance."""
-    store = MagicMock(spec=IPFSStore)
-    # Set default URIs for error messages if needed
-    store.gateway_uri_stem = "http://mock-gateway:8080"
-    store.rpc_uri_stem = "http://mock-rpc:5001"
-    return store
+# --- Tests for fetch_json_from_cid (Unit/Mocked) ---
 
 
 def test_fetch_json_from_cid_success(mock_ipfs_store: MockIPFSStore):
     """Test successful fetching and decoding of JSON from CID."""
-    valid_cid_str = (
-        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"  # Example CID
-    )
+    valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     json_data: Dict[str, Any] = {"key": "value"}
     mock_ipfs_store.load.return_value = json.dumps(json_data).encode("utf-8")
-
     result: Dict[str, Any] = fetch_json_from_cid(valid_cid_str, mock_ipfs_store)
-
     assert result == json_data
     mock_ipfs_store.load.assert_called_once()
     # Check that CID.decode was implicitly called by store.load mock (or explicitly if store expects CID obj)
@@ -135,9 +143,7 @@ def test_fetch_json_from_cid_success_with_prefix(mock_ipfs_store: MockIPFSStore)
     cid_str_with_prefix = f"/ipfs/{cid_str_no_prefix}"
     json_data: Dict[str, Any] = {"key": "value"}
     mock_ipfs_store.load.return_value = json.dumps(json_data).encode("utf-8")
-
     result: Dict[str, Any] = fetch_json_from_cid(cid_str_with_prefix, mock_ipfs_store)
-
     assert result == json_data
     mock_ipfs_store.load.assert_called_once()
     call_args = mock_ipfs_store.load.call_args[0]
@@ -159,7 +165,6 @@ def test_fetch_json_from_cid_load_returns_none(mock_ipfs_store: MockIPFSStore):
     """Test StacCatalogError when ipfs_store.load returns None or empty bytes."""
     valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     mock_ipfs_store.load.return_value = b""  # Empty bytes
-
     with pytest.raises(
         StacCatalogError, match=f"No data returned for CID: {valid_cid_str}"
     ):
@@ -171,7 +176,6 @@ def test_fetch_json_from_cid_json_decode_error(mock_ipfs_store: MockIPFSStore):
     """Test StacCatalogError when fetched data is not valid JSON."""
     valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     mock_ipfs_store.load.return_value = b"this is not json"
-
     with pytest.raises(
         StacCatalogError, match=f"Failed to decode JSON from CID {valid_cid_str}"
     ):
@@ -183,7 +187,6 @@ def test_fetch_json_from_cid_timeout_error(mock_ipfs_store: MockIPFSStore):
     """Test IpfsConnectionError when ipfs_store.load raises Timeout."""
     valid_cid_str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     mock_ipfs_store.load.side_effect = requests.exceptions.Timeout("Request timed out")
-
     with pytest.raises(
         IpfsConnectionError, match=f"Timeout fetching CID {valid_cid_str}"
     ):
@@ -225,8 +228,6 @@ def test_fetch_json_from_cid_generic_load_error(mock_ipfs_store: MockIPFSStore):
 
 
 # --- Tests for _get_host ---
-
-
 def test_get_host_default():
     """Test _get_host uses the default localhost when env var is not set."""
     # Import DEFAULT_HOST to use in assertion
@@ -243,6 +244,197 @@ def test_get_host_from_env(monkeypatch: MonkeyPatch):
     monkeypatch.setenv("IPFS_HOST", "http://my-ipfs-node:5002")
     assert _get_host() == "http://my-ipfs-node:5002/api/v0"
     assert _get_host("/other/uri") == "http://my-ipfs-node:5002/other/uri"
+
+
+# --- NEW: Tests for fetch_json_from_ipns (Mocked Error Paths) ---
+
+
+class TestFetchJsonFromIpnsErrors:
+    MOCK_IPNS = "k51qzi5uqu5dk89atnl883sr0g1cb2py631ckz9ng45qhk6dg0pj141jtxtx6l"
+    MOCK_GATEWAY = "http://mock-gateway:8080"
+    EXPECTED_URL = f"{MOCK_GATEWAY}/ipns/{MOCK_IPNS}"
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self, monkeypatch, mock_requests_get):
+        # Mock _get_ipfs_store to return a predictable gateway
+        mock_store = MagicMock(spec=IPFSStore)
+        mock_store.gateway_uri_stem = self.MOCK_GATEWAY
+        monkeypatch.setattr(
+            ipfs_retrieval, "_get_ipfs_store", lambda *args, **kwargs: mock_store
+        )
+        self.mock_requests_get = mock_requests_get
+
+    def mock_response(
+        self, status_code=200, json_data=None, text=None, raise_for_status_error=None
+    ) -> MockResponse:
+        mock_resp = MagicMock(spec=requests.Response)
+        mock_resp.status_code = status_code
+        mock_resp.raise_for_status.side_effect = raise_for_status_error
+        if json_data is not None:
+            mock_resp.json.return_value = json_data
+            # If json_data is provided, requests usually sets text as well
+            mock_resp.text = json.dumps(json_data) if text is None else text
+        else:
+            mock_resp.json.side_effect = requests.exceptions.JSONDecodeError(
+                "Expecting value", "doc", 0
+            )
+            mock_resp.text = text if text is not None else "Invalid JSON"
+        return mock_resp
+
+    def test_fetch_json_from_ipns_empty_name(self):
+        with pytest.raises(ValueError, match="IPNS name cannot be empty"):
+            fetch_json_from_ipns("")
+
+    def test_fetch_json_from_ipns_initial_timeout_then_success(self):
+        """Simulate timeout on first try, success on retry."""
+        mock_resp_success = self.mock_response(
+            status_code=200, json_data={"type": "Catalog"}
+        )
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            mock_resp_success,
+        ]
+
+        result = fetch_json_from_ipns(self.MOCK_IPNS)
+
+        assert result == {"type": "Catalog"}
+        assert self.mock_requests_get.call_count == 2
+        # Check params: first call with nocache=true, second without
+        assert self.mock_requests_get.call_args_list[0].kwargs["params"] == {
+            "nocache": "true"
+        }
+        assert self.mock_requests_get.call_args_list[1].kwargs["params"] == {}
+
+    def test_fetch_json_from_ipns_initial_connection_error(self):
+        """Simulate ConnectionError on first try (should raise immediately)."""
+        self.mock_requests_get.side_effect = requests.exceptions.ConnectionError(
+            "Gateway down"
+        )
+
+        with pytest.raises(IpfsConnectionError, match="Connection error fetching IPNS"):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 1
+
+    def test_fetch_json_from_ipns_initial_json_decode_then_success(self):
+        """Simulate JSON decode error on first try, success on retry."""
+        mock_resp_bad_json = self.mock_response(
+            status_code=200, text="<html>error page</html>"
+        )
+        mock_resp_success = self.mock_response(
+            status_code=200, json_data={"type": "Catalog"}
+        )
+        self.mock_requests_get.side_effect = [mock_resp_bad_json, mock_resp_success]
+
+        result = fetch_json_from_ipns(self.MOCK_IPNS)
+
+        assert result == {"type": "Catalog"}
+        assert self.mock_requests_get.call_count == 2
+        assert self.mock_requests_get.call_args_list[0].kwargs["params"] == {
+            "nocache": "true"
+        }
+        assert self.mock_requests_get.call_args_list[1].kwargs["params"] == {}
+
+    def test_fetch_json_from_ipns_initial_500_error_then_success(self):
+        """Simulate 500 HTTP error on first try, success on retry."""
+        mock_resp_500 = self.mock_response(
+            status_code=500,
+            text="Server Error",
+            raise_for_status_error=requests.exceptions.HTTPError("500 Error"),
+        )
+        mock_resp_success = self.mock_response(
+            status_code=200, json_data={"type": "Catalog"}
+        )
+        self.mock_requests_get.side_effect = [mock_resp_500, mock_resp_success]
+
+        result = fetch_json_from_ipns(self.MOCK_IPNS)
+
+        assert result == {"type": "Catalog"}
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_retry_timeout(self):
+        """Simulate failure on first try (e.g., timeout) AND timeout on retry."""
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            requests.exceptions.Timeout("Retry timeout"),
+        ]
+
+        with pytest.raises(
+            IpfsConnectionError, match="Timeout .* during IPNS fetch retry"
+        ):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_retry_connection_error(self):
+        """Simulate failure on first try AND ConnectionError on retry."""
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            requests.exceptions.ConnectionError("Retry connection failed"),
+        ]
+
+        with pytest.raises(
+            IpfsConnectionError, match="Connection error during IPNS fetch retry"
+        ):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_retry_json_decode_error(self):
+        """Simulate failure on first try AND JSON decode error on retry."""
+        mock_resp_bad_json_retry = self.mock_response(
+            status_code=200, text="Retry also bad json"
+        )
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            mock_resp_bad_json_retry,
+        ]
+
+        with pytest.raises(
+            StacCatalogError, match="Invalid JSON fetching IPNS .* \\(retry\\)"
+        ):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_retry_http_error(self):
+        """Simulate failure on first try AND HTTP error on retry."""
+        mock_resp_503_retry = self.mock_response(
+            status_code=503,
+            text="Service Unavailable",
+            raise_for_status_error=requests.exceptions.HTTPError("503 Error"),
+        )
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            mock_resp_503_retry,
+        ]
+
+        with pytest.raises(
+            StacCatalogError, match="Error fetching IPNS .* \\(retry\\) via Gateway"
+        ):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_initial_other_exception_then_success(self):
+        """Simulate generic exception on first try, success on retry."""
+        mock_resp_success = self.mock_response(
+            status_code=200, json_data={"type": "Catalog"}
+        )
+        self.mock_requests_get.side_effect = [
+            RuntimeError("Unexpected issue"),
+            mock_resp_success,
+        ]
+        result = fetch_json_from_ipns(self.MOCK_IPNS)
+        assert result == {"type": "Catalog"}
+        assert self.mock_requests_get.call_count == 2
+
+    def test_fetch_json_from_ipns_retry_other_exception(self):
+        """Simulate failure on first try AND generic exception on retry."""
+        self.mock_requests_get.side_effect = [
+            requests.exceptions.Timeout("Initial timeout"),
+            RuntimeError("Unexpected issue on retry"),
+        ]
+        with pytest.raises(
+            StacCatalogError, match="Unexpected error during IPNS fetch retry"
+        ):
+            fetch_json_from_ipns(self.MOCK_IPNS)
+        assert self.mock_requests_get.call_count == 2
 
 
 # --- Tests for get_ipns_name_hash (Legacy/Utility Function) ---
@@ -507,13 +699,6 @@ def test_list_datasets_functional():
 
 # --- Tests for update_cache_if_changed (Utility Function) ---
 # These remain unit tests using mocks for file I/O.
-
-
-def get_cache_path():
-    # Helper to get the expected cache file path within the package
-    # Need to ensure this reflects the actual location used by the code
-    package_dir = os.path.dirname(ipfs_retrieval.__file__)
-    return os.path.join(package_dir, "cids.json")
 
 
 # --- Helper Functions for Mocking --- #
