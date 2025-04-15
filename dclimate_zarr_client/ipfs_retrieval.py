@@ -314,7 +314,7 @@ def get_dataset_hamt_cid_from_stac(
                 logger.warning(
                     f"Skipping child link with unexpected string href format (expected dict): {link}"
                 )
-                # If needed: collections_to_visit.append(href_obj[6:])
+                collections_to_visit.append(href_obj[6:])
             else:
                 logger.warning(
                     f"Skipping invalid child link format in root catalog: {link}"

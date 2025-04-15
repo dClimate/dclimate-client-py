@@ -1,7 +1,7 @@
 import os
 import json
 from typing import Dict, Any  # Import Dict and Any
-from unittest.mock import patch, mock_open, MagicMock
+from unittest.mock import patch, mock_open, MagicMock, ANY
 
 import pytest
 import requests
@@ -10,6 +10,7 @@ from multiformats import CID  # Import CID
 import dclimate_zarr_client.ipfs_retrieval as ipfs_retrieval
 from dclimate_zarr_client.ipfs_retrieval import (
     fetch_json_from_ipns,
+    get_dataset_hamt_cid_from_stac,
     get_ipns_name_hash,
     update_cache_if_changed,
     DatasetNotFoundError,
@@ -435,6 +436,245 @@ class TestFetchJsonFromIpnsErrors:
         ):
             fetch_json_from_ipns(self.MOCK_IPNS)
         assert self.mock_requests_get.call_count == 2
+
+
+# --- NEW: Tests for get_dataset_hamt_cid_from_stac (Mocked Error Paths) ---
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_root_catalog_fetch_error(mock_fetch_cid, mock_fetch_ipns):
+    """Test error when fetching the root catalog fails."""
+    mock_fetch_ipns.side_effect = IpfsConnectionError("Cannot connect to gateway")
+    with pytest.raises(StacCatalogError, match="Failed to fetch root catalog"):
+        get_dataset_hamt_cid_from_stac(
+            DCLIMATE_STAC_CATALOG_IPNS, KNOWN_STAC_DATASET_ID
+        )
+    mock_fetch_ipns.assert_called_once()
+    mock_fetch_cid.assert_not_called()
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_invalid_root_catalog_format(mock_fetch_cid, mock_fetch_ipns):
+    """Test error when root catalog JSON is not a valid STAC Catalog."""
+    mock_fetch_ipns.return_value = {"not": "a catalog"}
+    with pytest.raises(StacCatalogError, match="Invalid root catalog format"):
+        get_dataset_hamt_cid_from_stac(
+            DCLIMATE_STAC_CATALOG_IPNS, KNOWN_STAC_DATASET_ID
+        )
+    mock_fetch_ipns.assert_called_once()
+    mock_fetch_cid.assert_not_called()
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_no_child_links(mock_fetch_cid, mock_fetch_ipns):
+    """Test error when root catalog has no valid child links."""
+    mock_fetch_ipns.return_value = {
+        "type": "Catalog",
+        "id": "root",
+        "links": [{"rel": "self", "href": "."}],  # No child links
+    }
+    with pytest.raises(StacCatalogError, match="No valid child collection links found"):
+        get_dataset_hamt_cid_from_stac(
+            DCLIMATE_STAC_CATALOG_IPNS, KNOWN_STAC_DATASET_ID
+        )
+    mock_fetch_ipns.assert_called_once()
+    mock_fetch_cid.assert_not_called()
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_invalid_child_link_formats(mock_fetch_cid, mock_fetch_ipns):
+    """Test skipping various invalid child link formats."""
+    mock_fetch_ipns.return_value = {
+        "type": "Catalog",
+        "id": "root",
+        "links": [
+            {
+                "rel": "child",
+                "type": "application/json",
+                "href": {"/": 123},
+            },  # Invalid CID value
+            {
+                "rel": "child",
+                "type": "application/json",
+                "href": "/ipfs/legacy_cid_string",
+            },  # Legacy string (warning expected)
+            {
+                "rel": "child",
+                "type": "application/json",
+                "href": "not_a_dict_or_ipfs_string",
+            },  # Invalid format
+            {"rel": "child", "type": "application/json"},  # Missing href
+            {
+                "rel": "child",
+                "type": "application/xml",
+                "href": {"/": "cid1"},
+            },  # Wrong type
+            {
+                "rel": "item",
+                "type": "application/json",
+                "href": {"/": "cid2"},
+            },  # Wrong rel
+        ],
+    }
+    # Expect DatasetNotFoundError because no *valid* child links lead anywhere
+    with pytest.raises(
+        DatasetNotFoundError, match=f"Dataset ID '{KNOWN_STAC_DATASET_ID}' not found"
+    ):
+        get_dataset_hamt_cid_from_stac(
+            DCLIMATE_STAC_CATALOG_IPNS, KNOWN_STAC_DATASET_ID
+        )
+    mock_fetch_ipns.assert_called_once()
+    mock_fetch_cid.assert_called_once()  # One legacy string was allowed
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_collection_fetch_error(mock_fetch_cid, mock_fetch_ipns):
+    """Test scenario where fetching a collection fails but others might succeed."""
+    target_dataset = "dataset-in-good-collection"
+    good_collection_cid = "bafyGoodCollection"
+    bad_collection_cid = "bafyBadCollection"
+
+    mock_fetch_ipns.return_value = {
+        "type": "Catalog",
+        "id": "root",
+        "links": [
+            {
+                "rel": "child",
+                "type": "application/json",
+                "href": {"/": bad_collection_cid},
+            },
+            {
+                "rel": "child",
+                "type": "application/json",
+                "href": {"/": good_collection_cid},
+            },
+        ],
+    }
+    # Mock fetch_json_from_cid behavior
+    good_item_cid = "bafyGoodItem"
+    good_hamt_cid = "bafyGoodHAMT"
+
+    def fetch_cid_side_effect(cid_str, store):
+        if cid_str == bad_collection_cid:
+            raise IpfsConnectionError("Failed to fetch bad collection")
+        elif cid_str == good_collection_cid:
+            return {
+                "type": "Collection",
+                "id": "good-collection",
+                "links": [
+                    {
+                        "rel": "item",
+                        "type": "application/json",
+                        "href": {"/": good_item_cid},
+                    }
+                ],
+            }
+        elif cid_str == good_item_cid:
+            return {
+                "type": "Feature",
+                "id": target_dataset,
+                "assets": {"hamt-zarr": {"href": f"/ipfs/{good_hamt_cid}"}},
+            }
+        else:
+            raise ValueError(f"Unexpected CID requested: {cid_str}")
+
+    mock_fetch_cid.side_effect = fetch_cid_side_effect
+
+    # Should succeed by finding the dataset in the good collection
+    result_cid = get_dataset_hamt_cid_from_stac(
+        DCLIMATE_STAC_CATALOG_IPNS, target_dataset
+    )
+    assert result_cid == good_hamt_cid
+    assert (
+        mock_fetch_cid.call_count == 3
+    )  # Bad collection fetch fails, good collection + good item fetches succeed
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_invalid_collection_format(mock_fetch_cid, mock_fetch_ipns):
+    """Test skipping invalid collection format."""
+    collection_cid = "bafyValidCollectionLink"
+    mock_fetch_ipns.return_value = {
+        "type": "Catalog",
+        "id": "root",
+        "links": [
+            {"rel": "child", "type": "application/json", "href": {"/": collection_cid}}
+        ],
+    }
+    mock_fetch_cid.return_value = {"not": "a collection"}  # Invalid format
+
+    with pytest.raises(
+        DatasetNotFoundError, match=f"Dataset ID '{KNOWN_STAC_DATASET_ID}' not found"
+    ):
+        get_dataset_hamt_cid_from_stac(
+            DCLIMATE_STAC_CATALOG_IPNS, KNOWN_STAC_DATASET_ID
+        )
+    mock_fetch_cid.assert_called_once_with(
+        collection_cid, ANY
+    )  # Assuming default store used internally
+
+
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_ipns")
+@patch("dclimate_zarr_client.ipfs_retrieval.fetch_json_from_cid")
+def test_get_hamt_cid_item_fetch_error(mock_fetch_cid, mock_fetch_ipns):
+    """Test scenario where fetching an item fails but the target is in another item."""
+    target_dataset = KNOWN_STAC_DATASET_ID
+    collection_cid = "bafyCollectionWithItems"
+    bad_item_cid = "bafyBadItem"
+    good_item_cid = "bafyGoodItem"
+    good_hamt_cid = "bafyTargetHAMT"
+
+    mock_fetch_ipns.return_value = {
+        "type": "Catalog",
+        "id": "root",
+        "links": [
+            {"rel": "child", "type": "application/json", "href": {"/": collection_cid}}
+        ],
+    }
+
+    def fetch_cid_side_effect(cid_str, store):
+        if cid_str == collection_cid:
+            return {
+                "type": "Collection",
+                "id": "collection",
+                "links": [
+                    {
+                        "rel": "item",
+                        "type": "application/json",
+                        "href": {"/": bad_item_cid},
+                    },
+                    {
+                        "rel": "item",
+                        "type": "application/json",
+                        "href": {"/": good_item_cid},
+                    },
+                ],
+            }
+        elif cid_str == bad_item_cid:
+            raise StacCatalogError("Failed to fetch bad item")
+        elif cid_str == good_item_cid:
+            return {
+                "type": "Feature",
+                "id": target_dataset,
+                "assets": {"hamt-zarr": {"href": f"/ipfs/{good_hamt_cid}"}},
+            }
+        else:
+            raise ValueError(f"Unexpected CID requested: {cid_str}")
+
+    mock_fetch_cid.side_effect = fetch_cid_side_effect
+
+    result_cid = get_dataset_hamt_cid_from_stac(
+        DCLIMATE_STAC_CATALOG_IPNS, target_dataset
+    )
+    assert result_cid == good_hamt_cid
+    # Called for collection, bad item (failed), good item (success)
+    assert mock_fetch_cid.call_count == 3
 
 
 # --- Tests for get_ipns_name_hash (Legacy/Utility Function) ---
