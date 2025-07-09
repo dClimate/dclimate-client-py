@@ -12,10 +12,9 @@ from .dclimate_zarr_errors import (
 )
 from .geotemporal_data import GeotemporalData, DEFAULT_POINT_LIMIT
 from .s3_retrieval import get_dataset_from_s3
-from .ipfs_retrieval import (
-    get_dataset_hamt_cid_from_stac,
-    _get_dataset_by_ipfs_cid,
-)
+# from .ipfs_retrieval import (
+#     _get_dataset_by_ipfs_cid,
+# )
 
 # Define the top-level dClimate STAC catalog IPNS name
 DCLIMATE_STAC_CATALOG_IPNS = (
@@ -23,65 +22,65 @@ DCLIMATE_STAC_CATALOG_IPNS = (
 )
 
 
-def load_ipfs_via_stac(
-    dataset_name: str,
-    # as_of: typing.Optional[datetime.datetime] = None, # Removed as_of
-    gateway_uri_stem: str | None = None,
-    rpc_uri_stem: str | None = None,
-) -> GeotemporalData:
-    """
-    Load a Geotemporal dataset from IPFS/IPNS via the dClimate STAC catalog.
+# def load_ipfs_via_stac(
+#     dataset_name: str,
+#     # as_of: typing.Optional[datetime.datetime] = None, # Removed as_of
+#     gateway_uri_stem: str | None = None,
+#     rpc_uri_stem: str | None = None,
+# ) -> GeotemporalData:
+#     """
+#     Load a Geotemporal dataset from IPFS/IPNS via the dClimate STAC catalog.
 
-    This function finds the dataset's IPNS name by navigating the STAC catalog
-    starting from a root IPNS name, resolves the dataset's IPNS name to its
-    current IPFS CID, and then loads the Zarr dataset.
+#     This function finds the dataset's IPNS name by navigating the STAC catalog
+#     starting from a root IPNS name, resolves the dataset's IPNS name to its
+#     current IPFS CID, and then loads the Zarr dataset.
 
-    Parameters
-    ----------
-    dataset_name : str
-        The identifier (e.g., 'cpc-precip-conus') of the dataset as found in the STAC catalog.
-    as_of: datetime.datetime, optional
-        Pull in most recent data created before this time. If ``None``, just get most
-        recent. Defaults to ``None``.
-    gateway_uri_stem : str, optional
-        Custom IPFS HTTP Gateway URI stem (e.g., "http://localhost:8080").
-        If None, uses the default from py-hamt's IPFSStore.
-    rpc_uri_stem : str, optional
-        Custom IPFS RPC API URI stem (e.g., "http://localhost:5001").
-        If None, uses the default from py-hamt's IPFSStore.
+#     Parameters
+#     ----------
+#     dataset_name : str
+#         The identifier (e.g., 'cpc-precip-conus') of the dataset as found in the STAC catalog.
+#     as_of: datetime.datetime, optional
+#         Pull in most recent data created before this time. If ``None``, just get most
+#         recent. Defaults to ``None``.
+#     gateway_uri_stem : str, optional
+#         Custom IPFS HTTP Gateway URI stem (e.g., "http://localhost:8080").
+#         If None, uses the default from py-hamt's IPFSStore.
+#     rpc_uri_stem : str, optional
+#         Custom IPFS RPC API URI stem (e.g., "http://localhost:5001").
+#         If None, uses the default from py-hamt's IPFSStore.
 
-    Returns
-    -------
-    GeotemporalData
-        A wrapper around the loaded Xarray dataset.
+#     Returns
+#     -------
+#     GeotemporalData
+#         A wrapper around the loaded Xarray dataset.
 
-    Raises
-    ------
-    DatasetNotFoundError
-        If the dataset cannot be found in the STAC catalog or lacks the HAMT asset.
-    IpfsConnectionError
-        If connection to IPFS fails.
-    StacCatalogError
-        For issues during STAC parsing or traversal.
-    """
-    # 1. Find the dataset's HAMT root IPFS CID from the STAC catalog
-    # Calls the renamed function from ipfs_retrieval
-    dataset_hamt_cid = get_dataset_hamt_cid_from_stac(
-        root_catalog_ipns=DCLIMATE_STAC_CATALOG_IPNS,
-        target_dataset_id=dataset_name,
-        gateway_uri_stem=gateway_uri_stem,  # Pass through config
-        rpc_uri_stem=rpc_uri_stem,  # Pass through config
-    )
+#     Raises
+#     ------
+#     DatasetNotFoundError
+#         If the dataset cannot be found in the STAC catalog or lacks the HAMT asset.
+#     IpfsConnectionError
+#         If connection to IPFS fails.
+#     StacCatalogError
+#         For issues during STAC parsing or traversal.
+#     """
+#     # 1. Find the dataset's HAMT root IPFS CID from the STAC catalog
+#     # Calls the renamed function from ipfs_retrieval
+#     dataset_hamt_cid = await get_dataset_hamt_cid_from_stac(
+#         root_catalog_ipns=DCLIMATE_STAC_CATALOG_IPNS,
+#         target_dataset_id=dataset_name,
+#         gateway_uri_stem=gateway_uri_stem,  # Pass through config
+#         rpc_uri_stem=rpc_uri_stem,  # Pass through config
+#     )
 
-    # 2. Load the dataset using the directly obtained HAMT IPFS CID
-    # NO LONGER NEED to resolve dataset IPNS name
-    ds = _get_dataset_by_ipfs_cid(
-        ipfs_cid=dataset_hamt_cid,
-        gateway_uri_stem=gateway_uri_stem,
-        rpc_uri_stem=rpc_uri_stem,
-    )
+#     # 2. Load the dataset using the directly obtained HAMT IPFS CID
+#     # NO LONGER NEED to resolve dataset IPNS name
+#     ds = _get_dataset_by_ipfs_cid(
+#         ipfs_cid=dataset_hamt_cid,
+#         gateway_uri_stem=gateway_uri_stem,
+#         rpc_uri_stem=rpc_uri_stem,
+#     )
 
-    return GeotemporalData(ds, dataset_name=dataset_name)
+#     return GeotemporalData(ds, dataset_name=dataset_name)
 
 
 def load_s3(
@@ -220,14 +219,14 @@ def geo_temporal_query(
         point_limit = DEFAULT_POINT_LIMIT
 
     # Load the dataset based on the source
-    if source == "ipfs":
-        # *** CALL THE RENAMED FUNCTION ***
-        data = load_ipfs_via_stac(
-            dataset_name,
-            gateway_uri_stem=gateway_uri_stem,
-            rpc_uri_stem=rpc_uri_stem,
-        )
-    elif source == "s3":
+    # if source == "ipfs":
+    #     # *** CALL THE RENAMED FUNCTION ***
+    #     data = load_ipfs_via_stac(
+    #         dataset_name,
+    #         gateway_uri_stem=gateway_uri_stem,
+    #         rpc_uri_stem=rpc_uri_stem,
+    #     )
+    if source == "s3":
         if not bucket_name:
             raise ValueError("bucket_name is required when source is 's3'")
         data = load_s3(dataset_name, bucket_name)

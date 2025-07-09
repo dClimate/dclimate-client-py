@@ -1,6 +1,6 @@
 # public API
 from .client import (
-    load_ipfs_via_stac,
+    # load_ipfs_via_stac,
     load_s3,
     geo_temporal_query,
 )  # Use renamed function
@@ -10,7 +10,7 @@ from .encryption_codec import (
 )
 
 __all__ = [
-    "load_ipfs_via_stac",
+    # "load_ipfs_via_stac",
     "load_s3",
     "geo_temporal_query",
     "GeotemporalData",

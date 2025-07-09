@@ -11,15 +11,16 @@ authors = [
     { name = "Evan Schechter", email = "evan@arbol.io" },
     { name = "Chris Rossi", email = "chris@christophermrossi.com" },
     { name = "Robert Banick", email = "robert.banick@arbol.io" },
+    { name = "Phil Van Meppelen scheppink", email = "phil@dclimate.net" },
 ]
 requires-python = ">=3.12"
 dependencies = [
     "aiobotocore",
-    "xarray",
+    "xarray[complete]>=2025.3.0",
     "rioxarray",
-    "zarr",
+    "zarr>=3.0.8",
     "numpy>=2.1.3",
-    "py_hamt @ git+https://github.com/dClimate/py-hamt",
+    "py-hamt>=3.2.0",
     "requests",
     "pyarrow",
     "geopandas",
@@ -28,7 +29,18 @@ dependencies = [
     "shapely",
     "scipy",
     "pycryptodome>=3.21.0",
+    "eth-ape>=0.8.4",
+    "web3>=6.20.1",
+    "pytest-asyncio>=1.0.0",
+    "ape-base>=0.8.1",
+    "ape-solidity>=0.8.5",
+    "eth-account>=0.11.3",
 ]
+
+[tool.uv.sources]
+py-hamt = { git = "https://github.com/dClimate/py-hamt", rev = "a60039b4e2305847c8b9241557a35f96038d7ca0" }
+# local path for py-hamt
+# py-hamt = { path = "../py-hamt", editable = true }
 
 [project.urls]
 Homepage = "https://dclimate.net/"
