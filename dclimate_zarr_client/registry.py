@@ -1,178 +1,186 @@
 import os
+import json
 from pathlib import Path
 from eth_account import Account
 from ape import accounts, Project, networks
 from ape.exceptions import AccountsError
-from ape_accounts import import_account_from_mnemonic
 from web3 import Web3
+from typing import List
 
-# The path to the embedded Ape project
+# --- Configuration ---
+
+# Path to the directory containing the compiled contract artifacts
 CONTRACTS_PROJECT_PATH = Path(__file__).parent / "contracts"
-STAC_REGISTRY_CONTRACT_ADDRESS = os.environ.get("STAC_REGISTRY_CONTRACT_ADDRESS", "0xabe7441E21bDb6cCf4E517E0072c5E962F5f0B2d")
-RPC_URL = os.environ.get("RPC_URL", "https://sepolia.base.org")
-STAC_REGISTRY_ABI = """
-[
-    {
-        "inputs": [{"internalType": "string", "name": "initialCid", "type": "string"}],
-        "stateMutability": "nonpayable",
-        "type": "constructor"
-    },
-    {
-        "anonymous": false,
-        "inputs": [
-            {"indexed": false, "internalType": "string", "name": "newCid", "type": "string"},
-            {"indexed": true, "internalType": "address", "name": "updater", "type": "address"}
-        ],
-        "name": "CidUpdated",
-        "type": "event"
-    },
-    {
-        "inputs": [],
-        "name": "getCid",
-        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [{"internalType": "address", "name": "newOwner", "type": "address"}],
-        "name": "changeOwner",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [{"internalType": "string", "name": "newCid", "type": "string"}],
-        "name": "updateCid",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    }
-]
-"""
 
+# Load environment variables
+STAC_REGISTRY_CONTRACT_ADDRESS = os.environ.get("STAC_REGISTRY_CONTRACT_ADDRESS", "0xb54A652489b864638d02C508A2d5Bc14FbFA8df8")
+RPC_URL = os.environ.get("RPC_URL", "https://sepolia.base.org")
+MNEMONIC_PATH = os.environ.get("MNEMONIC_PATH", "mnemonic.txt")
+
+
+# --- Helper Functions ---
 
 def _get_web3_instance() -> Web3:
     """Initializes and returns a Web3 instance."""
     return Web3(Web3.HTTPProvider(RPC_URL))
 
-def _load_account_from_mnemonic_ape(mnemonic_path: str):
-    """Loads a deployer/owner account from a mnemonic file."""
-    mnemonic_file = Path(mnemonic_path)
-    if not mnemonic_file.is_file():
-        raise FileNotFoundError(f"Mnemonic file not found at: {mnemonic_path}")
-    
-    # Use a unique alias to avoid collisions if multiple mnemonics are used
-    alias = f"etl_deployer_{mnemonic_file.stem}"
-    
-    try:
-        # Try to load if it already exists in Ape's accounts
-        return accounts.load(alias)
-    except KeyError:
-        print(f"Account '{alias}' not found. Importing from mnemonic...")
-        return import_account_from_mnemonic(
-            alias=alias, # Note the parameter name change to 'account_alias'
-            mnemonic=mnemonic_file.read_text().strip(),
-            passphrase=os.environ.get("APE_ACCOUNT_PASSPHRASE", "test") # Provide a default
-        )
+def _get_contract_abi() -> list:
+    """Loads the contract ABI from the project's build artifacts."""
+    abi_path = CONTRACTS_PROJECT_PATH / "compiled" / "contracts" / "StacRegistry.json"
+    if not abi_path.is_file():
+        raise FileNotFoundError(f"ABI file not found at: {abi_path}. Please compile your contract.")
+    with open(abi_path) as f:
+        contract_json = json.load(f)
+        return contract_json['contractTypes']['StacRegistry']['abi']
 
-def _load_account_from_mnemonic(mnemonic_path: str):
-    """Loads an account from a mnemonic file and returns the account object."""
-    mnemonic_file = Path(mnemonic_path)
+def _load_owner_account():
+    """Loads the owner account from a mnemonic file for web3.py usage."""
+    mnemonic_file = Path(MNEMONIC_PATH)
     if not mnemonic_file.is_file():
-        raise FileNotFoundError(f"Mnemonic file not found at: {mnemonic_path}")
+        raise FileNotFoundError(f"Mnemonic file not found at: {MNEMONIC_PATH}")
     
     Account.enable_unaudited_hdwallet_features()
     mnemonic = mnemonic_file.read_text().strip()
     return Account.from_mnemonic(mnemonic)
 
-def deploy_registry(initial_cid: str, mnemonic_path: str, network: str = "base:sepolia") -> str:
-    """
-    Deploys the StacRegistry contract programmatically.
+def _load_deployer_account_ape():
+    """Loads a deployer account from a mnemonic for Ape usage."""
+    mnemonic_file = Path(MNEMONIC_PATH)
+    alias = f"etl_deployer_{mnemonic_file.stem}"
+    try:
+        return accounts.load(alias)
+    except AccountsError:
+        print(f"Ape account '{alias}' not found. Importing from mnemonic...")
+        return accounts.import_account_from_mnemonic(
+            account_alias=alias,
+            mnemonic=mnemonic_file.read_text().strip(),
+            passphrase=os.environ.get("APE_ACCOUNT_PASSPHRASE", "")
+        )
 
-    Args:
-        initial_cid (str): The initial root CID of the STAC catalog.
-        mnemonic_path (str): The path to the mnemonic.txt file for the deployer account.
-        network (str): The network to deploy on (e.g., 'base:sepolia').
+def _execute_transaction(function_call):
+    """Builds, signs, and sends a transaction for the given function call."""
+    w3 = _get_web3_instance()
+    owner_account = _load_owner_account()
+    
+    tx = function_call.build_transaction({
+        'chainId': w3.eth.chain_id,
+        'from': owner_account.address,
+        'nonce': w3.eth.get_transaction_count(owner_account.address),
+        'gas': 5000000,  # Increased default gas limit for more complex transactions
+        'gasPrice': w3.eth.gas_price,
+    })
+    
+    signed_tx = w3.eth.account.sign_transaction(tx, private_key=owner_account.key)
+    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    
+    print(f"✓ Transaction successful! Hash: {receipt.transactionHash.hex()}")
+    return receipt.transactionHash.hex()
 
-    Returns:
-        str: The address of the newly deployed contract.
-    """
+
+# --- Deployment Function ---
+
+def deploy_registry(network: str = "base:sepolia") -> str:
+    """Deploys the StacRegistry contract using Ape."""
     project = Project(path=CONTRACTS_PROJECT_PATH)
-    deployer = _load_account_from_mnemonic_ape(mnemonic_path)
+    deployer = _load_deployer_account_ape()
 
     with networks.parse_network_choice(network) as provider:
         print(f"Using network: {provider.name}")
         print(f"Deployer address: {deployer.address}")
-        
+
         StacRegistry = project.StacRegistry
-        
-        print(f"Deploying StacRegistry with initial CID: {initial_cid}")
-        contract_instance = deployer.deploy(StacRegistry, initial_cid)
-        
-        print(f"✓ Deployment successful!")
+
+        print("Deploying StacRegistry...")
+        contract_instance = deployer.deploy(StacRegistry)
+
+        print(f"✓ Deployment successful! Contract Address: {contract_instance.address}")
         return contract_instance.address
 
-def _get_web3_instance() -> Web3:
-    """Initializes and returns a Web3 instance."""
-    return Web3(Web3.HTTPProvider(RPC_URL))
+# --- Read-Only (Getter) Functions ---
 
-def _load_account_from_mnemonic(mnemonic_path: str):
-    """Loads an account from a mnemonic file and returns the account object."""
-    mnemonic_file = Path(mnemonic_path)
-    if not mnemonic_file.is_file():
-        raise FileNotFoundError(f"Mnemonic file not found at: {mnemonic_path}")
-    
-    Account.enable_unaudited_hdwallet_features()
-    mnemonic = mnemonic_file.read_text().strip()
-    return Account.from_mnemonic(mnemonic)
-
-def update_registry(contract_address: str, new_cid: str, mnemonic_path: str) -> str:
-    """
-    Updates the STAC CID in an existing StacRegistry contract using web3.py.
-    """
+def get_stac_root_cid(contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Retrieves the top-level STAC Root CID."""
     w3 = _get_web3_instance()
-    owner_account = _load_account_from_mnemonic(mnemonic_path)
-    
-    contract = w3.eth.contract(address=contract_address, abi=STAC_REGISTRY_ABI)
-    
-    print(f"Using network: {RPC_URL}")
-    print(f"Owner address: {owner_account.address}")
-    print(f"Updating STAC CID on contract {contract_address} to: {new_cid}")
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    cid = contract.functions.stacRootCid().call()
+    print(f"STAC Root CID: {cid}")
+    return cid
 
-    # 1. Build the transaction
-    nonce = w3.eth.get_transaction_count(owner_account.address)
-    tx = contract.functions.updateCid(new_cid).build_transaction({
-        'chainId': w3.eth.chain_id,
-        'from': owner_account.address,
-        'nonce': nonce,
-        'gas': 200000,  # You might need to adjust gas estimation
-        'gasPrice': w3.eth.gas_price,
-    })
-
-    # 2. Sign the transaction
-    signed_tx = w3.eth.account.sign_transaction(tx, private_key=owner_account.key)
-
-    # 3. Send the raw transaction
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
-    
-    # 4. Wait for the transaction receipt (optional, but good practice)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-    
-    print("✓ Update successful!")
-    print(f"Transaction hash: {receipt.transactionHash.hex()}")
-    
-    return receipt.transactionHash.hex()
-
-def get_cid_from_registry() -> str:
-    """
-    Retrieves the current STAC CID from the StacRegistry contract.
-    (This function already uses web3.py correctly)
-    """
+def resolve_path(path: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Resolves a 'collection-dataset-type' path to its CID."""
     w3 = _get_web3_instance()
-    contract = w3.eth.contract(
-        address=STAC_REGISTRY_CONTRACT_ADDRESS,
-        abi=STAC_REGISTRY_ABI
-    )
-    stac_cid = contract.functions.getCid().call()
-    print(f"Current STAC CID from registry: {stac_cid}")
-    return stac_cid
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    cid = contract.functions.resolve(path).call()
+    print(f"CID for path '{path}': {cid}")
+    return cid
+
+def get_collections(contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> List[str]:
+    """Retrieves the list of all collection names."""
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    collections = contract.functions.getCollections().call()
+    print(f"Available Collections: {collections}")
+    return collections
+
+def get_datasets(collection_name: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> List[str]:
+    """Retrieves the list of all dataset names for a given collection."""
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    datasets = contract.functions.getDatasets(collection_name).call()
+    print(f"Available Datasets in '{collection_name}': {datasets}")
+    return datasets
+
+def get_types(collection_name: str, dataset_name: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> List[str]:
+    """Retrieves the list of all type names for a given dataset."""
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    types = contract.functions.getTypes(collection_name, dataset_name).call()
+    print(f"Available Types in '{collection_name}/{dataset_name}': {types}")
+    return types
+
+
+# --- State-Changing (Update/Init) Functions ---
+
+def update_stac_root_cid(new_cid: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Updates the top-level STAC Root CID."""
+    print(f"Updating STAC Root CID to: {new_cid}")
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    function_call = contract.functions.updateStacRoot(new_cid)
+    return _execute_transaction(function_call)
+
+def update_path_cid(path: str, new_cid: str, category: int = 1, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """
+    Updates the CID for a specific 'collection-dataset-type' path.
+    Category: 0 for APPEND, 1 for REPLACE.
+    """
+    print(f"Updating CID for path '{path}' to: {new_cid}")
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    function_call = contract.functions.updateCid(path, new_cid, category)
+    return _execute_transaction(function_call)
+
+def init_collection(collection_name: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Initializes a new collection."""
+    print(f"Initializing collection: {collection_name}")
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    function_call = contract.functions.initCollection(collection_name)
+    return _execute_transaction(function_call)
+
+def init_dataset(collection_name: str, dataset_name: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Initializes a new dataset within a collection."""
+    print(f"Initializing dataset '{dataset_name}' in collection '{collection_name}'")
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    function_call = contract.functions.initDataset(collection_name, dataset_name)
+    return _execute_transaction(function_call)
+
+def init_type(collection_name: str, dataset_name: str, type_name: str, initial_cid: str, contract_address: str = STAC_REGISTRY_CONTRACT_ADDRESS) -> str:
+    """Initializes a new type for a dataset with an initial CID."""
+    print(f"Initializing type '{type_name}' for '{collection_name}/{dataset_name}' with CID: {initial_cid}")
+    w3 = _get_web3_instance()
+    contract = w3.eth.contract(address=contract_address, abi=_get_contract_abi())
+    function_call = contract.functions.initType(collection_name, dataset_name, type_name, initial_cid)
+    return _execute_transaction(function_call)

@@ -31,94 +31,94 @@ logger = logging.getLogger(__name__)
 _stac_hamt_cid_cache: typing.Dict[str, str] = {}
 
 
-async def get_dataset_stac(
-    stac_root_cid: str,
-    collection: str,
-    dataset: str,
-    gateway_uri_stem: str,
-) -> dict:
-    """
-    Traverses a STAC catalog on IPFS starting from a root CID to find and
-    return a specific dataset's STAC Item JSON.
+# async def get_dataset_stac(
+#     stac_root_cid: str,
+#     collection: str,
+#     dataset: str,
+#     gateway_uri_stem: str,
+# ) -> dict:
+#     """
+#     Traverses a STAC catalog on IPFS starting from a root CID to find and
+#     return a specific dataset's STAC Item JSON.
 
-    This function uses KuboCAS for all IPFS interactions.
+#     This function uses KuboCAS for all IPFS interactions.
 
-    Args:
-        stac_root_cid (str): The root CID of the STAC catalog.
-        collection (str): The ID or title of the target collection.
-        dataset (str): The ID of the target dataset (STAC Item).
-        gateway_uri_stem (str): The base URL for the IPFS gateway.
+#     Args:
+#         stac_root_cid (str): The root CID of the STAC catalog.
+#         collection (str): The ID or title of the target collection.
+#         dataset (str): The ID of the target dataset (STAC Item).
+#         gateway_uri_stem (str): The base URL for the IPFS gateway.
 
-    Returns:
-        dict: The STAC Item JSON for the requested dataset.
+#     Returns:
+#         dict: The STAC Item JSON for the requested dataset.
 
-    Raises:
-        StacCatalogError: If the catalog structure is invalid or a network error occurs.
-        DatasetNotFoundError: If the collection or dataset cannot be found.
-    """
-    logger.info(
-        f"Searching STAC catalog for dataset '{dataset}' in collection '{collection}'"
-    )
-    async with KuboCAS(gateway_base_url=gateway_uri_stem) as kubo_cas:
-        try:
-            # 1. Fetch the root catalog
-            logger.debug(f"Fetching root catalog from CID: {stac_root_cid}")
-            root_catalog_bytes = await kubo_cas.load(CID.decode(stac_root_cid))
-            root_catalog = json.loads(root_catalog_bytes)
+#     Raises:
+#         StacCatalogError: If the catalog structure is invalid or a network error occurs.
+#         DatasetNotFoundError: If the collection or dataset cannot be found.
+#     """
+#     logger.info(
+#         f"Searching STAC catalog for dataset '{dataset}' in collection '{collection}'"
+#     )
+#     async with KuboCAS(gateway_base_url=gateway_uri_stem) as kubo_cas:
+#         try:
+#             # 1. Fetch the root catalog
+#             logger.debug(f"Fetching root catalog from CID: {stac_root_cid}")
+#             root_catalog_bytes = await kubo_cas.load(CID.decode(stac_root_cid))
+#             root_catalog = json.loads(root_catalog_bytes)
 
-            if not isinstance(root_catalog, dict) or root_catalog.get("type") != "Catalog":
-                raise StacCatalogError("Invalid root catalog format.")
+#             if not isinstance(root_catalog, dict) or root_catalog.get("type") != "Catalog":
+#                 raise StacCatalogError("Invalid root catalog format.")
 
-            # 2. Find the target collection's CID
-            collection_cid_str = None
-            for link in root_catalog.get("links", []):
-                # Match by collection ID or title for flexibility
-                if link.get("rel") == "child" and (
-                    link.get("title") == collection or link.get("id") == collection
-                ):
-                    href_obj = link.get("href")
-                    if isinstance(href_obj, dict) and "/" in href_obj:
-                        collection_cid_str = href_obj["/"]
-                        break
+#             # 2. Find the target collection's CID
+#             collection_cid_str = None
+#             for link in root_catalog.get("links", []):
+#                 # Match by collection ID or title for flexibility
+#                 if link.get("rel") == "child" and (
+#                     link.get("title") == collection or link.get("id") == collection
+#                 ):
+#                     href_obj = link.get("href")
+#                     if isinstance(href_obj, dict) and "/" in href_obj:
+#                         collection_cid_str = href_obj["/"]
+#                         break
             
-            if not collection_cid_str:
-                raise DatasetNotFoundError(f"Collection '{collection}' not found in root catalog.")
+#             if not collection_cid_str:
+#                 raise DatasetNotFoundError(f"Collection '{collection}' not found in root catalog.")
 
-            # 3. Fetch the collection
-            logger.debug(f"Fetching collection '{collection}' from CID: {collection_cid_str}")
-            collection_bytes = await kubo_cas.load(CID.decode(collection_cid_str))
-            collection_json = json.loads(collection_bytes)
+#             # 3. Fetch the collection
+#             logger.debug(f"Fetching collection '{collection}' from CID: {collection_cid_str}")
+#             collection_bytes = await kubo_cas.load(CID.decode(collection_cid_str))
+#             collection_json = json.loads(collection_bytes)
 
-            if not isinstance(collection_json, dict) or collection_json.get("type") != "Collection":
-                raise StacCatalogError(f"Invalid format for collection '{collection}'.")
+#             if not isinstance(collection_json, dict) or collection_json.get("type") != "Collection":
+#                 raise StacCatalogError(f"Invalid format for collection '{collection}'.")
 
-            # 4. Find and return the target dataset (item) or collection
-            for item_link in collection_json.get("links", []):
-                if item_link.get("rel") == "item" or item_link.get("rel") == "child":
-                    item_href_obj = item_link.get("href")
-                    item_cid_str = None
-                    if isinstance(item_href_obj, dict) and "/" in item_href_obj:
-                        item_cid_str = item_href_obj["/"]
+#             # 4. Find and return the target dataset (item) or collection
+#             for item_link in collection_json.get("links", []):
+#                 if item_link.get("rel") == "item" or item_link.get("rel") == "child":
+#                     item_href_obj = item_link.get("href")
+#                     item_cid_str = None
+#                     if isinstance(item_href_obj, dict) and "/" in item_href_obj:
+#                         item_cid_str = item_href_obj["/"]
                     
-                    if not item_cid_str:
-                        continue
+#                     if not item_cid_str:
+#                         continue
 
-                    # Fetch the item to check its ID
-                    item_bytes = await kubo_cas.load(CID.decode(item_cid_str))
-                    item_json = json.loads(item_bytes)
+#                     # Fetch the item to check its ID
+#                     item_bytes = await kubo_cas.load(CID.decode(item_cid_str))
+#                     item_json = json.loads(item_bytes)
                     
-                    if item_json.get("id") == dataset:
-                        logger.info(f"Found matching STAC Item for dataset '{dataset}'.")
-                        return item_json # Return the full STAC item
+#                     if item_json.get("id") == dataset:
+#                         logger.info(f"Found matching STAC Item for dataset '{dataset}'.")
+#                         return item_json # Return the full STAC item
 
-            # If the loop completes, the dataset was not found in the collection
-            raise DatasetNotFoundError(f"Dataset '{dataset}' not found in collection '{collection}'.")
+#             # If the loop completes, the dataset was not found in the collection
+#             raise DatasetNotFoundError(f"Dataset '{dataset}' not found in collection '{collection}'.")
 
-        except Exception as e:
-            # Catch potential errors from KuboCAS (e.g., network issues) or JSON parsing
-            # and wrap them in a more specific error.
-            logger.error(f"Failed during STAC traversal: {e}", exc_info=True)
-            raise StacCatalogError(f"An error occurred during STAC traversal: {e}") from e
+#         except Exception as e:
+#             # Catch potential errors from KuboCAS (e.g., network issues) or JSON parsing
+#             # and wrap them in a more specific error.
+#             logger.error(f"Failed during STAC traversal: {e}", exc_info=True)
+#             raise StacCatalogError(f"An error occurred during STAC traversal: {e}") from e
 
 # --- IPFSStore Configuration ---
 # async def _get_ipfs_store(

@@ -4,7 +4,7 @@ Functions that will map to endpoints in the flask app
 from .loaders.era5 import ERA5Loader
 from .geotemporal_data import GeotemporalData
 import xarray as xr
-from .registry import get_cid_from_registry
+# from .registry import get_cid_from_registry
 from py_hamt import KuboCAS
 from multiformats import CID
 import json
@@ -77,63 +77,63 @@ async def _load_stac_json_from_cid(cid: str) -> dict:
             raise
 
 # Get all datasets in the catalog
-async def get_all_datasets(collection: str, gateway_url: str = DCLIMATE_GATEWAY_URL) -> list:
-    """
-    Fetches all datasets available in a specific collection from dClimate.
+# async def get_all_datasets(collection: str, gateway_url: str = DCLIMATE_GATEWAY_URL) -> list:
+#     """
+#     Fetches all datasets available in a specific collection from dClimate.
 
-    Args:
-        collection (str): The name of the data collection (e.g., "era5").
-        gateway_url (str): The IPFS gateway URL to use for fetching data.
+#     Args:
+#         collection (str): The name of the data collection (e.g., "era5").
+#         gateway_url (str): The IPFS gateway URL to use for fetching data.
 
-    Returns:
-        list: A list of dataset names available in the specified collection.
-    """
-    stac_root_cid = get_cid_from_registry()
+#     Returns:
+#         list: A list of dataset names available in the specified collection.
+#     """
+#     stac_root_cid = get_cid_from_registry()
 
-    stac_json = await _load_stac_json_from_cid(stac_root_cid)
-    if not stac_json:
-        raise ValueError(f"No STAC JSON found for collection: {collection}")
+#     stac_json = await _load_stac_json_from_cid(stac_root_cid)
+#     if not stac_json:
+#         raise ValueError(f"No STAC JSON found for collection: {collection}")
     
-    collection_cid = None
+#     collection_cid = None
 
-    # Capitalize all letters in collection
-    collection = collection.upper()
+#     # Capitalize all letters in collection
+#     collection = collection.upper()
 
-    # The first links that are of rel child are all the collections
-    for link in stac_json.get("links", []):
-        if link.get("rel") == "child" and link.get("title") == collection:
-            collection_cid = link.get("href")["/"]
-            break
+#     # The first links that are of rel child are all the collections
+#     for link in stac_json.get("links", []):
+#         if link.get("rel") == "child" and link.get("title") == collection:
+#             collection_cid = link.get("href")["/"]
+#             break
 
-    if not collection_cid:
-        raise ValueError(f"No datasets found for collection: {collection}")
+#     if not collection_cid:
+#         raise ValueError(f"No datasets found for collection: {collection}")
 
-    # Get the stac for the collection
-    collection_stac = await _load_stac_json_from_cid(collection_cid)
-    if not collection_stac:
-        raise ValueError(f"No STAC JSON found for collection CID: {collection_cid}")
-    # Extract dataset names from the collection STAC
-    datasets = []
-    for item in collection_stac.get("links", []):
-        if item.get("rel") == "child":
-            datasets.append(item.get("title"))
-        if item.get("rel") == "item":
-            datasets.append(item.get("title"))
-    return datasets
+#     # Get the stac for the collection
+#     collection_stac = await _load_stac_json_from_cid(collection_cid)
+#     if not collection_stac:
+#         raise ValueError(f"No STAC JSON found for collection CID: {collection_cid}")
+#     # Extract dataset names from the collection STAC
+#     datasets = []
+#     for item in collection_stac.get("links", []):
+#         if item.get("rel") == "child":
+#             datasets.append(item.get("title"))
+#         if item.get("rel") == "item":
+#             datasets.append(item.get("title"))
+#     return datasets
 
-async def get_all_collections(gateway_url: str = DCLIMATE_GATEWAY_URL) -> list:
-    """
-    Fetches all collections available in the dClimate catalog.
-    """
-    stac_root_cid = get_cid_from_registry()
+# async def get_all_collections(gateway_url: str = DCLIMATE_GATEWAY_URL) -> list:
+#     """
+#     Fetches all collections available in the dClimate catalog.
+#     """
+#     stac_root_cid = get_cid_from_registry()
 
-    stac_json = await _load_stac_json_from_cid(stac_root_cid)
-    if not stac_json:
-        raise ValueError(f"No STAC JSON found for collection: {collection}")
+#     stac_json = await _load_stac_json_from_cid(stac_root_cid)
+#     if not stac_json:
+#         raise ValueError(f"No STAC JSON found for collection: {collection}")
 
-    collections = []
-    for link in stac_json.get("links", []):
-        if link.get("rel") == "child":
-            collections.append(link.get("title"))
+#     collections = []
+#     for link in stac_json.get("links", []):
+#         if link.get("rel") == "child":
+#             collections.append(link.get("title"))
 
-    return collections
+#     return collections
