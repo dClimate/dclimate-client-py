@@ -14,7 +14,7 @@ from numcodecs.zarr3 import Blosc
 
 from Crypto.Random import get_random_bytes
 
-from py_hamt import HAMT, IPFSStore, IPFSZarr3
+from py_hamt import HAMT, KuboCAS, ZarrHAMTStore
 
 from dclimate_zarr_client.encryption_codec import EncryptionCodec
 
@@ -128,7 +128,8 @@ def test_compute_encoded_size():
     assert EncryptionCodec().compute_encoded_size(100, "RANDOM VALUE") == 140
 
 
-def test_upload_then_read(
+@pytest.mark.asyncio
+async def test_upload_then_read(
     random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes
 ):
     zarr_path, expected_ds = random_zarr_dataset
@@ -141,59 +142,63 @@ def test_upload_then_read(
     assert isinstance(test_ds["temp"].encoding["compressors"][1], EncryptionCodec)
 
     # Prepare Writing to IPFS
-    hamt1 = HAMT(
-        store=IPFSStore(),
-    )
-    ipfszarr3 = IPFSZarr3(hamt1)
+    async with KuboCAS() as kubo_cas:
+        hamt1 = await HAMT.build(
+            cas=kubo_cas,
+            values_are_bytes=True,
+        )
+        ipfszarr3 = ZarrHAMTStore(hamt1)
 
-    test_ds.to_zarr(
-        store=ipfszarr3,
-        mode="w",
-        consolidated=False,  # Match read setting
-    )
+        test_ds.to_zarr(
+            store=ipfszarr3,
+            mode="w",
+            consolidated=False,  # Match read setting
+        )
+        await hamt1.make_read_only()
 
-    hamt1_root: CID = hamt1.root_node_id  # type: ignore
+        hamt1_root: CID = hamt1.root_node_id  # type: ignore
 
-    # Read the dataset from IPFS
-    hamt1_read = HAMT(
-        store=IPFSStore(),
-        root_node_id=hamt1_root,
-        read_only=True,
-    )
-    hamt1_read_z3 = IPFSZarr3(hamt1_read)
+        # Read the dataset from IPFS
+        hamt1_read = await HAMT.build(
+            cas=kubo_cas,
+            root_node_id=hamt1_root,
+            read_only=True,
+            values_are_bytes=True,
+        )
+        hamt1_read_z3 = ZarrHAMTStore(hamt1_read, read_only=True)
 
-    loaded_ds1 = xr.open_zarr(
-        store=hamt1_read_z3, consolidated=False
-    )  # Match write setting
+        loaded_ds1 = xr.open_zarr(
+            store=hamt1_read_z3, consolidated=False
+        )  # Match write setting
 
-    # Assert the values are the same and can be read in the context
-    # Check if the values of 'temp' and 'precip' are equal in all datasets
-    assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
-        "Temp values in loaded_ds1 and expected_ds are not identical!"
-    )
-    assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
-        "Precip values in loaded_ds1 and expected_ds are not identical!"
-    )
+        # Assert the values are the same and can be read in the context
+        # Check if the values of 'temp' and 'precip' are equal in all datasets
+        assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
+            "Temp values in loaded_ds1 and expected_ds are not identical!"
+        )
+        assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
+            "Precip values in loaded_ds1 and expected_ds are not identical!"
+        )
 
-    # Attempt to read with the WRONG key
-    # Create new encryption filter but with a different encryption key
-    wrong_encryption_key = get_random_bytes(32)
-    EncryptionCodec.set_encryption_key(wrong_encryption_key)
-    zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
+        # Attempt to read with the WRONG key
+        # Create new encryption filter but with a different encryption key
+        wrong_encryption_key = get_random_bytes(32)
+        EncryptionCodec.set_encryption_key(wrong_encryption_key)
+        zarr.registry.register_codec("xchacha20poly1305", EncryptionCodec)
 
-    assert wrong_encryption_key != original_encryption_key  # Ensure it's different
+        assert wrong_encryption_key != original_encryption_key  # Ensure it's different
 
-    loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
+        loaded_failure = xr.open_zarr(store=hamt1_read_z3, consolidated=False)
 
-    # Accessing data should raise an exception since we don't have the correct encryption key
-    with pytest.raises(Exception):
-        _ = loaded_failure["temp"].values
+        # Accessing data should raise an exception since we don't have the correct encryption key
+        with pytest.raises(Exception):
+            _ = loaded_failure["temp"].values
 
-    # Check that you can still read the precip since it was not encrypted
-    assert loaded_failure["precip"].values[0][0][0]
+        # Check that you can still read the precip since it was not encrypted
+        assert loaded_failure["precip"].values[0][0][0]
 
-    assert "temp" in loaded_ds1
-    assert "precip" in loaded_ds1
-    assert loaded_ds1.temp.attrs["units"] == "celsius"
+        assert "temp" in loaded_ds1
+        assert "precip" in loaded_ds1
+        assert loaded_ds1.temp.attrs["units"] == "celsius"
 
-    assert loaded_ds1.temp.shape == expected_ds.temp.shape
+        assert loaded_ds1.temp.shape == expected_ds.temp.shape

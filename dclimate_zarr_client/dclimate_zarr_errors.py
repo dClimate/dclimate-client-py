@@ -61,6 +61,13 @@ class AmbiguousDataVariableError(ZarrClientError):
 class IpfsConnectionError(ZarrClientError):
     """Raised when connection to IPFS daemon or gateway fails"""
 
+class InvalidSelectionError(ZarrClientError):
+    """Raised when dataset/collection/variant selection is invalid or ambiguous"""
 
-class StacCatalogError(ZarrClientError):
-    """Raised for issues during STAC catalog traversal"""
+
+class VariantNotFoundError(ZarrClientError):
+    """Raised when specified variant is not found in dataset"""
+
+
+class CollectionNotFoundError(ZarrClientError):
+    """Raised when specified collection is not found in catalog"""
