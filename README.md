@@ -6,9 +6,6 @@ Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structur
 
 Filtering and aggregation are packaged into convenience functions optimized for flexibility and performance.
 
-The main entrypoint for IPFS data is:
-- `dclimate_client_py.dClimateClient` - **Recommended**: Async context manager that handles IPFS connections automatically
-
 ## Usage
 
 ```python
