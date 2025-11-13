@@ -55,7 +55,7 @@ class PathNotFoundError(ZarrClientError):
 class AmbiguousDataVariableError(ZarrClientError):
     """Raised when method that requires a specific data variable is called, the dataset
     has more than variable, and the dataset hasn't been specified by a call to
-    :method:`dclimate_zarr_client.geotemporal_data.GeotemporalData.use`"""
+    :method:`dclimate_client_py.geotemporal_data.GeotemporalData.use`"""
 
 
 class IpfsConnectionError(ZarrClientError):

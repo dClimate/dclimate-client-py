@@ -22,7 +22,7 @@ from .datasets import (
 from .dclimate_zarr_errors import InvalidSelectionError
 
 
-class dDClimateClient:
+class dClimateClient:
     """
     Async context manager for loading dClimate datasets from IPFS.
 
@@ -44,8 +44,8 @@ class dDClimateClient:
     --------
     Basic usage with default IPFS configuration:
 
-    >>> async with dDClimateClient() as client:
-    ...     dataset = await client.load_dclimate_dataset(
+    >>> async with dClimateClient() as client:
+    ...     dataset = await client.load_dataset(
     ...         dataset="2m_temperature",
     ...         collection="era5",
     ...         variant="finalized"
@@ -54,8 +54,8 @@ class dDClimateClient:
 
     With custom IPFS endpoints:
 
-    >>> async with dDClimateClient() as client:
-    ...     dataset = await client.load_dclimate_dataset(
+    >>> async with dClimateClient() as client:
+    ...     dataset = await client.load_dataset(
     ...         dataset="2m_temperature",
     ...         collection="era5",
     ...         variant="finalized",
@@ -74,7 +74,7 @@ class dDClimateClient:
         self._catalog = catalog or DATASET_CATALOG_INTERNAL
         self._kubo_cas: typing.Optional[KuboCAS] = None
 
-    async def __aenter__(self) -> "dDClimateClient":
+    async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
         # Create KuboCAS with configured endpoints
         self._kubo_cas = KuboCAS(
@@ -91,7 +91,7 @@ class dDClimateClient:
             await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
             self._kubo_cas = None
 
-    async def load_dclimate_dataset(
+    async def load_dataset(
         self,
         dataset: str,
         collection: typing.Optional[str] = None,
@@ -145,8 +145,8 @@ class dDClimateClient:
 
         Examples
         --------
-        >>> async with dDClimateClient() as client:
-        ...     dataset = await client.load_dclimate_dataset(
+        >>> async with dClimateClient() as client:
+        ...     dataset = await client.load_dataset(
         ...         dataset="2m_temperature",
         ...         collection="era5",
         ...         variant="finalized"
@@ -156,13 +156,12 @@ class dDClimateClient:
         """
         if not self._kubo_cas:
             raise RuntimeError(
-                "dDClimateClient must be used as an async context manager. "
-                "Use 'async with dDClimateClient() as client:'"
+                "dClimateClient must be used as an async context manager. "
+                "Use 'async with dClimateClient() as client:'"
             )
 
         # Use slug for metadata
         dataset_slug = f"{collection or 'auto'}/{dataset}/{variant or 'auto'}"
-
         # Case 1: Direct CID provided - bypass catalog resolution
         if cid:
             ds = await _load_dataset_from_ipfs_cid(

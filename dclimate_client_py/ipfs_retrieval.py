@@ -26,7 +26,7 @@ async def _load_dataset_from_ipfs_cid(
     """
     Internal function to load a Zarr dataset from IPFS using a provided KuboCAS instance.
 
-    This function is called by both the new dDClimateClient and the legacy
+    This function is called by both the new dClimateClient and the legacy
     _get_dataset_by_ipfs_cid function. It attempts to load as ShardedZarrStore
     first (99% of cases), then falls back to HAMT store if that fails.
 
@@ -121,7 +121,7 @@ async def _get_dataset_by_ipfs_cid(
     Gets an xarray dataset directly from its Zarr root IPFS CID.
 
     This is a legacy wrapper that creates its own KuboCAS instance for
-    backward compatibility. New code should use dDClimateClient instead.
+    backward compatibility. New code should use dClimateClient instead.
 
     Attempts to load as ShardedZarrStore first (99% of cases), then falls back
     to HAMT store if that fails.

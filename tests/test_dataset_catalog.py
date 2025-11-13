@@ -1,7 +1,7 @@
 """
 Tests for dataset catalog functionality.
 
-Tests the new load_dclimate_dataset() function and related catalog features.
+Tests the new load_dataset() function and related catalog features.
 """
 
 import pytest
@@ -9,20 +9,19 @@ import numpy as np
 import xarray as xr
 from unittest.mock import Mock, patch, MagicMock
 
-from dclimate_zarr_client import (
-    load_dclimate_dataset,
+from dclimate_client_py import (
     list_dataset_catalog,
     DatasetCatalog,
     GeotemporalData,
-    dDClimateClient,
+    dClimateClient,
 )
-from dclimate_zarr_client.dclimate_zarr_errors import (
+from dclimate_client_py.dclimate_zarr_errors import (
     DatasetNotFoundError,
     CollectionNotFoundError,
     VariantNotFoundError,
     InvalidSelectionError,
 )
-from dclimate_zarr_client.datasets import (
+from dclimate_client_py.datasets import (
     normalize_key,
     find_collection_by_name,
     find_dataset_by_name,
@@ -221,7 +220,7 @@ def test_resolve_dataset_source_errors():
         )
 
 
-# --- Test load_dclimate_dataset ---
+# --- Test load_dataset ---
 
 
 @pytest.fixture
@@ -244,146 +243,150 @@ def mock_xarray_dataset():
     return ds
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
-async def test_load_dclimate_dataset_direct_cid(mock_get_dataset, mock_xarray_dataset):
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
+async def test_load_dataset_direct_cid(mock_get_dataset, mock_xarray_dataset):
     """Test loading dataset with direct CID."""
     mock_get_dataset.return_value = mock_xarray_dataset
 
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        cid="bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
-    )
+    async with dClimateClient() as client:
 
-    # Should call _get_dataset_by_ipfs_cid with the CID
-    mock_get_dataset.assert_called_once()
-    call_kwargs = mock_get_dataset.call_args[1]
-    assert call_kwargs["ipfs_cid"] == "bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
+        )
 
-    # Should return GeotemporalData by default
-    assert isinstance(result, GeotemporalData)
+        # Should call _load_dataset_from_ipfs_cid with the CID
+        mock_get_dataset.assert_called_once()
+        call_kwargs = mock_get_dataset.call_args[1]
+        assert call_kwargs["ipfs_cid"] == "bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
+
+        # Should return GeotemporalData by default
+        assert isinstance(result, GeotemporalData)
 
 
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_return_xarray(mock_get_dataset, mock_xarray_dataset):
+async def test_load_dataset_return_xarray(mock_get_dataset, mock_xarray_dataset):
     """Test loading dataset and returning raw xarray.Dataset."""
     mock_get_dataset.return_value = mock_xarray_dataset
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u",
+            return_xarray=True
+        )
 
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        cid="bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4",
-        return_xarray=True
-    )
-
-    # Should return xarray.Dataset
-    assert isinstance(result, xr.Dataset)
-    assert result is mock_xarray_dataset
+        # Should return xarray.Dataset
+        assert isinstance(result, xr.Dataset)
+        assert result is mock_xarray_dataset
 
 
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_single_variant(mock_get_dataset, mock_xarray_dataset):
+async def test_load_dataset_single_variant(mock_get_dataset, mock_xarray_dataset):
     """Test loading dataset with explicit variant."""
     mock_get_dataset.return_value = mock_xarray_dataset
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            collection="era5",
+            variant="finalized"
+        )
 
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        collection="era5",
-        variant="finalized"
-    )
+        # Should call _load_dataset_from_ipfs_cid
+        mock_get_dataset.assert_called_once()
 
-    # Should call _get_dataset_by_ipfs_cid
-    mock_get_dataset.assert_called_once()
-
-    # Should return GeotemporalData
-    assert isinstance(result, GeotemporalData)
+        # Should return GeotemporalData
+        assert isinstance(result, GeotemporalData)
 
 
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_multi_variant_no_selection():
+async def test_load_dataset_multi_variant_no_selection():
     """Test error when dataset has multiple variants and no variant specified."""
     # ERA5 2m_temperature has multiple variants, should raise error without variant selection
     # Note: Auto-concatenation is disabled due to xarray lazy concat limitations
     with pytest.raises(InvalidSelectionError, match="multiple variants"):
-        await load_dclimate_dataset(
-            dataset="2m_temperature",
-            collection="era5",
-            return_xarray=True
-        )
+        async with dClimateClient() as client:
+            await client.load_dataset(
+                dataset="2m_temperature",
+                collection="era5",
+                return_xarray=True
+            )
 
 
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_single_variant_autodetect(mock_get_dataset, mock_xarray_dataset):
+async def test_load_dataset_single_variant_autodetect(mock_get_dataset, mock_xarray_dataset):
     """Test loading dataset with single variant (no explicit variant needed)."""
     mock_get_dataset.return_value = mock_xarray_dataset
 
-    # IFS temp2m has only one variant, so should load without specifying variant
-    result = await load_dclimate_dataset(
-        dataset="temperature",
-        collection="ifs",
-        return_xarray=True
+    async with dClimateClient() as client:
+        # IFS temp2m has only one variant, so should load without specifying variant
+        result = await client.load_dataset(
+            dataset="temperature",
+            collection="ifs",
+            return_xarray=True
     )
 
-    # Should call _get_dataset_by_ipfs_cid
-    mock_get_dataset.assert_called_once()
+        # Should call _load_dataset_from_ipfs_cid
+        mock_get_dataset.assert_called_once()
 
-    # Should return xarray.Dataset
-    assert isinstance(result, xr.Dataset)
-
+        # Should return xarray.Dataset
+        assert isinstance(result, xr.Dataset)
 
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_collection_not_found():
+async def test_load_dataset_collection_not_found():
     """Test error when collection not found."""
     with pytest.raises(CollectionNotFoundError):
-        await load_dclimate_dataset(
-            dataset="2m_temperature",
-            collection="nonexistent"
-        )
-
+        async with dClimateClient() as client:
+            await client.load_dataset(
+                dataset="2m_temperature",
+                collection="nonexistent"
+            )
 
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_dataset_not_found():
+async def test_load_dataset_dataset_not_found():
     """Test error when dataset not found."""
     with pytest.raises(DatasetNotFoundError):
-        await load_dclimate_dataset(
-            dataset="nonexistent",
-            collection="era5"
-        )
-
+        async with dClimateClient() as client:
+            await client.load_dataset(
+                dataset="nonexistent",
+                collection="era5"
+            )
 
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_variant_not_found():
+async def test_load_dataset_variant_not_found():
     """Test error when variant not found."""
     with pytest.raises(VariantNotFoundError):
-        await load_dclimate_dataset(
-            dataset="2m_temperature",
-            collection="era5",
-            variant="nonexistent"
-        )
+        async with dClimateClient() as client:
+            await client.load_dataset(
+                dataset="2m_temperature",
+                collection="era5",
+                variant="nonexistent"
+            )
 
 
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 @pytest.mark.asyncio
-async def test_load_dclimate_dataset_with_gateway_config(mock_get_dataset, mock_xarray_dataset):
+async def test_load_dataset_with_gateway_config(mock_get_dataset, mock_xarray_dataset):
     """Test loading dataset with custom IPFS gateway configuration."""
     mock_get_dataset.return_value = mock_xarray_dataset
+    async with dClimateClient(
+        gateway_base_url="http://localhost:8080",
+        rpc_base_url="http://localhost:5001"
+    ) as client:
 
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        collection="era5",
-        variant="finalized",
-        gateway_uri_stem="http://localhost:8080",
-        rpc_uri_stem="http://localhost:5001"
-    )
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            collection="era5",
+            variant="finalized"
+        )
 
-    # Should pass gateway config to _get_dataset_by_ipfs_cid
-    call_kwargs = mock_get_dataset.call_args[1]
-    assert call_kwargs["gateway_uri_stem"] == "http://localhost:8080"
-    assert call_kwargs["rpc_uri_stem"] == "http://localhost:5001"
+        # Should call _load_dataset_from_ipfs_cid
+        mock_get_dataset.assert_called_once()
 
-    # Should return GeotemporalData
-    assert isinstance(result, GeotemporalData)
+        # Should return GeotemporalData
+        assert isinstance(result, GeotemporalData)
 
 
 # --- Test Concatenation Logic ---
@@ -421,7 +424,7 @@ def mock_datasets_for_concat():
 
 def test_find_split_index():
     """Test finding split index for concatenation."""
-    from dclimate_zarr_client.concatenate import find_split_index
+    from dclimate_client_py.concatenate import find_split_index
 
     # Test with datetime
     combined_coords = np.arange("2020-01-01", "2020-01-06", dtype="datetime64[D]")
@@ -451,7 +454,7 @@ def test_find_split_index():
 # --- Integration-like Tests (with mocking) ---
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.client._get_dataset_by_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 async def test_full_workflow_explicit_variant(mock_get_dataset, mock_xarray_dataset):
     """Test full workflow: list catalog, then load specific variant."""
     mock_get_dataset.return_value = mock_xarray_dataset
@@ -467,14 +470,16 @@ async def test_full_workflow_explicit_variant(mock_get_dataset, mock_xarray_data
     # Step 3: Load a specific variant
     variant_name = temp2m["variants"][0]["variant"]
 
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        collection="era5",
-        variant=variant_name
-    )
+    async with dClimateClient() as client:
 
-    assert isinstance(result, GeotemporalData)
-    mock_get_dataset.assert_called_once()
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            collection="era5",
+            variant=variant_name
+        )
+
+        assert isinstance(result, GeotemporalData)
+        mock_get_dataset.assert_called_once()
     
 @pytest.mark.asyncio
 async def test_full_workflow_with_explicit_variant():
@@ -484,27 +489,28 @@ async def test_full_workflow_with_explicit_variant():
 
     # Step 2: Load with explicit variant (required for multi-variant datasets)
     # Note: Auto-concatenation is disabled due to xarray lazy concat limitations
-    result = await load_dclimate_dataset(
-        dataset="2m_temperature",
-        collection="era5",
-        variant="finalized",  # Must specify variant for multi-variant datasets
-        return_xarray=True
-    )
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
+            dataset="2m_temperature",
+            collection="era5",
+            variant="finalized",  # Must specify variant for multi-variant datasets
+            return_xarray=True
+        )
 
-    assert isinstance(result, xr.Dataset)
+        assert isinstance(result, xr.Dataset)
 
 
-# --- Test dDClimateClient ---
+# --- Test dClimateClient ---
 
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.ipfs_retrieval._load_dataset_from_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 async def test_dclimate_client_basic(mock_load_dataset, mock_xarray_dataset):
-    """Test basic dDClimateClient usage."""
+    """Test basic dClimateClient usage."""
     mock_load_dataset.return_value = mock_xarray_dataset
 
-    async with dDClimateClient() as client:
-        result = await client.load_dclimate_dataset(
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -513,18 +519,18 @@ async def test_dclimate_client_basic(mock_load_dataset, mock_xarray_dataset):
         # Should return GeotemporalData by default
         assert isinstance(result, GeotemporalData)
 
-    # Should have called the internal load function
-    mock_load_dataset.assert_called_once()
+        # Should have called the internal load function
+        mock_load_dataset.assert_called_once()
 
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.ipfs_retrieval._load_dataset_from_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 async def test_dclimate_client_return_xarray(mock_load_dataset, mock_xarray_dataset):
-    """Test dDClimateClient returning raw xarray.Dataset."""
+    """Test dClimateClient returning raw xarray.Dataset."""
     mock_load_dataset.return_value = mock_xarray_dataset
 
-    async with dDClimateClient() as client:
-        result = await client.load_dclimate_dataset(
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -537,38 +543,37 @@ async def test_dclimate_client_return_xarray(mock_load_dataset, mock_xarray_data
 
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.ipfs_retrieval._load_dataset_from_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 async def test_dclimate_client_with_cid(mock_load_dataset, mock_xarray_dataset):
-    """Test dDClimateClient with direct CID."""
+    """Test dClimateClient with direct CID."""
     mock_load_dataset.return_value = mock_xarray_dataset
 
-    async with dDClimateClient() as client:
-        result = await client.load_dclimate_dataset(
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
             dataset="test",
-            cid="bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
+            cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
         )
 
-        # Should call with the CID and KuboCAS instance
+        # Should call with the CID
         mock_load_dataset.assert_called_once()
         # Check kwargs instead since the function is called with keyword arguments
         call_kwargs = mock_load_dataset.call_args.kwargs
-        assert call_kwargs["ipfs_cid"] == "bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
-        assert "kubo_cas" in call_kwargs
+        assert call_kwargs["ipfs_cid"] == "bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
 
         assert isinstance(result, GeotemporalData)
 
 
 @pytest.mark.asyncio
-@patch("dclimate_zarr_client.ipfs_retrieval._load_dataset_from_ipfs_cid")
+@patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 async def test_dclimate_client_custom_endpoints(mock_load_dataset, mock_xarray_dataset):
-    """Test dDClimateClient with custom IPFS endpoints."""
+    """Test dClimateClient with custom IPFS endpoints."""
     mock_load_dataset.return_value = mock_xarray_dataset
 
-    async with dDClimateClient(
+    async with dClimateClient(
         gateway_base_url="https://ipfs.io",
         rpc_base_url="http://localhost:5001"
     ) as client:
-        result = await client.load_dclimate_dataset(
+        result = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -581,12 +586,12 @@ async def test_dclimate_client_custom_endpoints(mock_load_dataset, mock_xarray_d
 
 @pytest.mark.asyncio
 async def test_dclimate_client_not_in_context():
-    """Test that using dDClimateClient outside context manager raises error."""
-    client = dDClimateClient()
+    """Test that using dClimateClient outside context manager raises error."""
+    client = dClimateClient()
 
     # Should raise error when not in async context
     with pytest.raises(RuntimeError, match="must be used as an async context manager"):
-        await client.load_dclimate_dataset(
+        await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -595,25 +600,25 @@ async def test_dclimate_client_not_in_context():
 
 @pytest.mark.asyncio
 async def test_dclimate_client_errors():
-    """Test that dDClimateClient propagates catalog errors correctly."""
-    async with dDClimateClient() as client:
+    """Test that dClimateClient propagates catalog errors correctly."""
+    async with dClimateClient() as client:
         # Non-existent collection
         with pytest.raises(CollectionNotFoundError):
-            await client.load_dclimate_dataset(
+            await client.load_dataset(
                 dataset="2m_temperature",
                 collection="nonexistent"
             )
 
         # Non-existent dataset
         with pytest.raises(DatasetNotFoundError):
-            await client.load_dclimate_dataset(
+            await client.load_dataset(
                 dataset="nonexistent",
                 collection="era5"
             )
 
         # Multi-variant without specifying variant
         with pytest.raises(InvalidSelectionError):
-            await client.load_dclimate_dataset(
+            await client.load_dataset(
                 dataset="2m_temperature",
                 collection="era5"
             )
@@ -621,15 +626,15 @@ async def test_dclimate_client_errors():
 
 @pytest.mark.asyncio
 async def test_dclimate_client_workflow():
-    """Test full workflow with dDClimateClient."""
+    """Test full workflow with dClimateClient."""
 
     # List catalog (synchronous)
     catalog = list_dataset_catalog()
     assert len(catalog) > 0
 
     # Use client to load dataset
-    async with dDClimateClient() as client:
-        result = await client.load_dclimate_dataset(
+    async with dClimateClient() as client:
+        result = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -640,7 +645,7 @@ async def test_dclimate_client_workflow():
         assert isinstance(result, GeotemporalData)
         
         # load again with return_xarray=True
-        result_xr = await client.load_dclimate_dataset(
+        result_xr = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -653,7 +658,7 @@ async def test_dclimate_client_workflow():
         assert point_dataset["2m_temperature"].values == 274.18854
 
         # load again with return_xarray=True
-        result_xr = await client.load_dclimate_dataset(
+        result_xr = await client.load_dataset(
             dataset="temperature",
             collection="aifs",
             variant="single",

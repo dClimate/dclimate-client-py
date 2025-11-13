@@ -7,16 +7,16 @@ Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structur
 Filtering and aggregation are packaged into convenience functions optimized for flexibility and performance.
 
 The main entrypoint for IPFS data is:
-- `dclimate_zarr_client.dDClimateClient` - **Recommended**: Async context manager that handles IPFS connections automatically
+- `dclimate_client_py.dClimateClient` - **Recommended**: Async context manager that handles IPFS connections automatically
 
 ## Usage
 
 ```python
 from datetime import datetime
-import dclimate_zarr_client as client
-from dclimate_zarr_client import dDClimateClient
+import dclimate_client_py as client
+from dclimate_client_py import dClimateClient
 
-# --- Recommended: Using dDClimateClient (async context manager) ---
+# --- Recommended: Using dClimateClient (async context manager) ---
 
 async def main():
     # The client manages IPFS connections automatically
@@ -24,7 +24,7 @@ async def main():
     async with dClimateClient() as dclimate:
         # Load datasets by name from the internal catalog
         # For datasets with multiple variants, you must specify which variant
-        dataset = await dclimate.load_dclimate_dataset(
+        dataset = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",  # Required for multi-variant datasets
@@ -42,11 +42,11 @@ async def main():
 
 # Custom IPFS endpoints (optional)
 async def main_custom_ipfs():
-    async with dDClimateClient(
+    async with dClimateClient(
         gateway_base_url="https://ipfs.io",
         rpc_base_url="http://localhost:5001"
     ) as dclimate:
-        dataset = await dclimate.load_dclimate_dataset(
+        dataset = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -55,8 +55,8 @@ async def main_custom_ipfs():
 
 # Get raw xarray.Dataset directly
 async def main_xarray():
-    async with dDClimateClient() as dclimate:
-        xr_dataset = await dclimate.load_dclimate_dataset(
+    async with dClimateClient() as dclimate:
+        xr_dataset = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -99,12 +99,12 @@ uv run pytest tests/
 ## Use Coverage
 
 ```shell
-uv run pytest --cov=dclimate_zarr_client tests/ --cov-report=xml
+uv run pytest --cov=dclimate_client_py tests/ --cov-report=xml
 ```
 
 ## Environment requirements
 
-- Running IPFS daemon
+- Optionally you can run your own IPFS Server to host your own datasets or connect to others.
 
 
 ## File breakdown:

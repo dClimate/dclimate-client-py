@@ -5,7 +5,7 @@ requires = ["pdm-backend==2.4.3"]
 build-backend = "pdm.backend"
 
 [project]
-name = "dclimate_zarr_client"
+name = "dclimate_client_py"
 version = "0.1.0" # Set a static version or handle it in versioning strategy
 authors = [
     { name = "Evan Schechter", email = "evan@arbol.io" },

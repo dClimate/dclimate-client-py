@@ -1,7 +1,7 @@
 import pytest
 
-import dclimate_zarr_client.s3_retrieval as s3_retrieval
-from dclimate_zarr_client.dclimate_zarr_errors import DatasetNotFoundError
+import dclimate_client_py.s3_retrieval as s3_retrieval
+from dclimate_client_py.dclimate_zarr_errors import DatasetNotFoundError
 import json
 import os
 from collections import namedtuple
@@ -12,7 +12,7 @@ class TestS3Retrieval:
     def fake_s3fs(self, mocker):
         fake_s3fs = mocker.Mock()
         mocker.patch(
-            "dclimate_zarr_client.s3_retrieval.get_s3_fs", return_value=fake_s3fs
+            "dclimate_client_py.s3_retrieval.get_s3_fs", return_value=fake_s3fs
         )
         return fake_s3fs
 
@@ -22,7 +22,7 @@ class TestS3Retrieval:
         ):
             dataset_name = "copernicus_ocean_salinity_1p5_meters-daily"
             bucket_name = "zarr-prod"
-            s3Map_mock = mocker.patch("dclimate_zarr_client.s3_retrieval.S3Map")
+            s3Map_mock = mocker.patch("dclimate_client_py.s3_retrieval.S3Map")
 
             mock_dataset = namedtuple("Dataset", ["update_in_progress"])(False)
             mocker.patch("xarray.open_zarr", return_value=mock_dataset)

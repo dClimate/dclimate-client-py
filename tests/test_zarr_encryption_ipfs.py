@@ -16,7 +16,7 @@ from Crypto.Random import get_random_bytes
 
 from py_hamt import HAMT, KuboCAS, ZarrHAMTStore
 
-from dclimate_zarr_client.encryption_codec import EncryptionCodec
+from dclimate_client_py.encryption_codec import EncryptionCodec
 
 
 # Fixture to provide the encryption key used for initial dataset creation

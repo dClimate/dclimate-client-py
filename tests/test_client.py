@@ -8,8 +8,8 @@ import pytest
 import xarray as xr
 import zarr
 
-import dclimate_zarr_client.client as client
-from dclimate_zarr_client.dclimate_zarr_errors import (
+import dclimate_client_py.client as client
+from dclimate_client_py.dclimate_zarr_errors import (
     SelectionTooLargeError,
     ConflictingGeoRequestError,
     NoDataFoundError,
@@ -40,7 +40,7 @@ pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
 SAMPLE_ZARRS = pathlib.Path(__file__).parent / "etc" / "sample_zarrs"
 
 
-@unittest.mock.patch("dclimate_zarr_client.client.get_dataset_from_s3")
+@unittest.mock.patch("dclimate_client_py.client.get_dataset_from_s3")
 def test_load_s3(get_dataset_from_s3, dataset):
     get_dataset_from_s3.return_value = dataset
 
@@ -97,12 +97,12 @@ def patch_s3(module_mocker):
     """
     # Patch the function where it's called in the client module
     module_mocker.patch(
-        "dclimate_zarr_client.client.get_dataset_from_s3",
+        "dclimate_client_py.client.get_dataset_from_s3",
         patched_get_dataset_from_s3,
     )
     # Patch it in the s3_retrieval module too, in case it's called directly elsewhere
     module_mocker.patch(
-        "dclimate_zarr_client.s3_retrieval.get_dataset_from_s3",
+        "dclimate_client_py.s3_retrieval.get_dataset_from_s3",
         patched_get_dataset_from_s3,
     )
 
@@ -112,17 +112,17 @@ def patch_s3(module_mocker):
 @pytest.mark.asyncio
 async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
     """
-    Test geotemporal queries functionally using IPFS source via dDClimateClient.
+    Test geotemporal queries functionally using IPFS source via dClimateClient.
     Focus on basic point, rectangle, time range, and output formats.
     Aggregation tests might be slow; keep them simple or separate.
     """
-    from dclimate_zarr_client.dclimate_client import dDClimateClient
+    from dclimate_client_py.dclimate_client import dClimateClient
 
-    async with dDClimateClient() as dclimate:
+    async with dClimateClient() as dclimate:
         # Point query
         try:
             # Load the dataset once
-            dataset = await dclimate.load_dclimate_dataset(
+            dataset = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",
@@ -168,7 +168,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         # Rectangle query + NetCDF output
         try:
             # Load the dataset again for rectangle query
-            dataset = await dclimate.load_dclimate_dataset(
+            dataset = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",
@@ -216,7 +216,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         # Basic spatial aggregation (mean over a small box)
         try:
             # Load the dataset again for spatial aggregation query
-            dataset = await dclimate.load_dclimate_dataset(
+            dataset = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",

@@ -3,8 +3,8 @@ import datetime
 import numpy as np
 import pytest
 
-from dclimate_zarr_client import dclimate_zarr_errors as errors
-from dclimate_zarr_client.geotemporal_data import GeotemporalData
+from dclimate_client_py import dclimate_zarr_errors as errors
+from dclimate_client_py.geotemporal_data import GeotemporalData
 
 
 class TestGeotemporalData:

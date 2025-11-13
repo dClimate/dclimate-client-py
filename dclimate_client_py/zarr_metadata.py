@@ -1,9 +1,9 @@
-from dclimate_zarr_client.dclimate_zarr_errors import (
+from dclimate_client_py.dclimate_zarr_errors import (
     BucketNotFoundError,
     PathNotFoundError,
     ZarrClientError,
 )
-from dclimate_zarr_client.s3_retrieval import get_s3_fs
+from dclimate_client_py.s3_retrieval import get_s3_fs
 import typing
 import os
 import json

@@ -40,7 +40,7 @@ jobs:
         run: uv sync --extra dev --extra testing
 
       - name: Run pytest with coverage
-        run: uv run pytest --cov=dclimate_zarr_client tests/ --cov-report=xml
+        run: uv run pytest --cov=dclimate_client_py tests/ --cov-report=xml
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5

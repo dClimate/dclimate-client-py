@@ -6,7 +6,7 @@ This document explains how to use the new dataset catalog functionality in dclim
 
 The new functionality includes:
 
-1. **`load_dclimate_dataset()`** - Main entry point for loading datasets from the catalog
+1. **`load_dataset()`** - Main entry point for loading datasets from the catalog
 2. **`list_dataset_catalog()`** - List all available datasets in the catalog
 3. **Dataset catalog structure** - Internal catalog of datasets with collections, variants, and CIDs
 
@@ -19,10 +19,10 @@ The new functionality includes:
 Instead of manually managing CIDs, you can now load datasets by their logical names:
 
 ```python
-from dclimate_zarr_client import load_dclimate_dataset
+from dclimate_client_py import load_dataset
 
 # Load a specific variant
-ds = load_dclimate_dataset(
+ds = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="finalized"
@@ -35,14 +35,14 @@ For datasets with multiple variants, you must explicitly specify which variant t
 
 ```python
 # Load the finalized variant
-ds = load_dclimate_dataset(
+ds = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="finalized"  # Required for multi-variant datasets
 )
 
 # Or load the non-finalized variant
-ds = load_dclimate_dataset(
+ds = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="non-finalized"
@@ -58,7 +58,7 @@ If you don't want the GeotemporalData wrapper, you can get the raw xarray Datase
 
 ```python
 # Get raw xarray.Dataset instead of GeotemporalData
-xr_ds = load_dclimate_dataset(
+xr_ds = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="finalized",
@@ -71,7 +71,7 @@ xr_ds = load_dclimate_dataset(
 Discover what datasets are available in the catalog with multiple output formats:
 
 ```python
-from dclimate_zarr_client import list_dataset_catalog
+from dclimate_client_py import list_dataset_catalog
 
 catalog = list_dataset_catalog()
 
@@ -140,7 +140,7 @@ for collection in catalog:
 You can still load datasets directly by CID, bypassing catalog resolution:
 
 ```python
-ds = load_dclimate_dataset(
+ds = load_dataset(
     dataset="temp2m",  # Used for metadata only
     cid="bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
 )
@@ -148,10 +148,10 @@ ds = load_dclimate_dataset(
 
 ## Complete API Reference
 
-### `load_dclimate_dataset()`
+### `load_dataset()`
 
 ```python
-load_dclimate_dataset(
+load_dataset(
     dataset: str,                           # Required: dataset name
     collection: Optional[str] = None,       # Collection name (auto-detected if omitted)
     variant: Optional[str] = None,          # Variant name (or use auto_concatenate)
@@ -198,13 +198,13 @@ The catalog maintains concatenation metadata for future use when xarray's lazy c
 # - "non-finalized": Recent data including last 5 days (concat_priority: 2)
 
 # Currently, you must load each variant separately:
-finalized = load_dclimate_dataset(
+finalized = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="finalized"
 )
 
-non_finalized = load_dclimate_dataset(
+non_finalized = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="non-finalized"
@@ -249,15 +249,15 @@ The internal catalog (`DATASET_CATALOG_INTERNAL`) contains:
 }
 ```
 
-**Note**: The example CIDs in the current catalog are placeholders. You'll need to update [datasets.py](dclimate_zarr_client/datasets.py) with real CIDs for your datasets.
+**Note**: The example CIDs in the current catalog are placeholders. You'll need to update [datasets.py](dclimate_client_py/datasets.py) with real CIDs for your datasets.
 
 ## Error Handling
 
 The new functions provide helpful error messages:
 
 ```python
-from dclimate_zarr_client import load_dclimate_dataset
-from dclimate_zarr_client.dclimate_zarr_errors import (
+from dclimate_client_py import load_dataset
+from dclimate_client_py.dclimate_zarr_errors import (
     DatasetNotFoundError,
     CollectionNotFoundError,
     VariantNotFoundError,
@@ -265,12 +265,12 @@ from dclimate_zarr_client.dclimate_zarr_errors import (
 )
 
 try:
-    ds = load_dclimate_dataset(dataset="nonexistent")
+    ds = load_dataset(dataset="nonexistent")
 except DatasetNotFoundError as e:
     print(f"Dataset not found: {e}")
 
 try:
-    ds = load_dclimate_dataset(
+    ds = load_dataset(
         dataset="temp2m",
         collection="nonexistent"
     )
@@ -278,7 +278,7 @@ except CollectionNotFoundError as e:
     print(f"Collection not found: {e}")
 
 try:
-    ds = load_dclimate_dataset(
+    ds = load_dataset(
         dataset="temp2m",
         collection="era5",
         variant="nonexistent"
@@ -288,7 +288,7 @@ except VariantNotFoundError as e:
 
 try:
     # Multi-variant dataset without specifying variant (will raise error)
-    ds = load_dclimate_dataset(
+    ds = load_dataset(
         dataset="temp2m",
         collection="era5"
         # Missing: variant="finalized" or variant="non-finalized"
@@ -302,9 +302,9 @@ except InvalidSelectionError as e:
 
 ```python
 # NEW: Catalog-based loading with explicit variant selection
-from dclimate_zarr_client import load_dclimate_dataset
+from dclimate_client_py import load_dataset
 
-ds = load_dclimate_dataset(
+ds = load_dataset(
     dataset="temp2m",
     collection="era5",
     variant="finalized",  # Must specify variant for multi-variant datasets
@@ -324,7 +324,7 @@ The catalog structure supports features that can be added in the future:
 
 ## Updating the Catalog
 
-To add new datasets to the catalog, edit [datasets.py](dclimate_zarr_client/datasets.py):
+To add new datasets to the catalog, edit [datasets.py](dclimate_client_py/datasets.py):
 
 ```python
 DATASET_CATALOG_INTERNAL: DatasetCatalog = [
@@ -352,7 +352,7 @@ DATASET_CATALOG_INTERNAL: DatasetCatalog = [
 
 | Feature | dclimate-client-js | dclimate-zarr-client (Python) |
 |---------|-------------------|-------------------------------|
-| Load by dataset name | ✅ `loadDataset()` | ✅ `load_dclimate_dataset()` |
+| Load by dataset name | ✅ `loadDataset()` | ✅ `load_dataset()` |
 | Auto-concatenation | ✅ Smart concatenation | ⏸️ Disabled (pending lazy concat support) |
 | List catalog | ✅ `listDatasetCatalog()` | ✅ `list_dataset_catalog()` |
 | Return type options | ✅ Jaxray or GeoTemporal | ✅ xarray or GeotemporalData |
