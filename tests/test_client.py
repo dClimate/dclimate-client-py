@@ -264,101 +264,10 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
             pytest.fail(f"IPFS spatial aggregation query failed with unexpected error: {e}")
 
 
-# --- Error Handling Tests (using IPFS source) ---
-
-# These tests primarily check input validation or errors that occur *after* loading.
-# They now need to use a valid IPFS dataset name.
-
-
-def test_geo_conflicts_ipfs():
-    """Test conflicting geo requests with IPFS source."""
-    with pytest.raises(
-        ConflictingGeoRequestError, match="more than one type of geographic query"
-    ):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_DATASET_ID,  # Use valid dataset
-            source="ipfs",
-            rectangle_kwargs={
-                "min_lat": 40,
-                "min_lon": -105,
-                "max_lat": 41,
-                "max_lon": -104,
-            },
-            circle_kwargs={"center_lat": 40.5, "center_lon": -104.5, "radius": 10},
-        )
-    with pytest.raises(
-        ConflictingGeoRequestError,
-        match="spatial aggregation methods on a single point",
-    ):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_DATASET_ID,
-            source="ipfs",
-            point_kwargs={
-                "latitude": KNOWN_STAC_COORD_LAT,
-                "longitude": KNOWN_STAC_COORD_LON,
-            },
-            spatial_agg_kwargs={"agg_method": "std"},
-        )
-
-
-@pytest.mark.skipif(
-    KNOWN_STAC_FORECAST_ID is None,
-    reason="No known forecast dataset ID for STAC testing",
-)
-def test_geo_forecast_conflicts_ipfs():
-    """Test forecast-related errors with IPFS source."""
-    # Requires a known forecast dataset ID available via STAC
-    # Test requesting forecast dataset without specifying time
-    with pytest.raises(InvalidForecastRequestError):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_FORECAST_ID,  # Use known forecast dataset
-            source="ipfs",
-            rectangle_kwargs={
-                "min_lat": 40,
-                "min_lon": -105,
-                "max_lat": 41,
-                "max_lon": -104,
-            },
-            # Missing forecast_reference_time
-        )
-    # Test requesting forecast time from a non-forecast dataset
-    with pytest.raises(MissingDimensionsError):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_DATASET_ID,  # Use non-forecast dataset
-            source="ipfs",
-            forecast_reference_time="2023-01-01T00:00:00",  # Provide time
-        )
-
-
-def test_temp_agg_conflicts_ipfs():
-    """Test conflicting temporal aggregation with IPFS source."""
-    with pytest.raises(ConflictingAggregationRequestError):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_DATASET_ID,
-            source="ipfs",
-            rectangle_kwargs={
-                "min_lat": 40,
-                "min_lon": -105,
-                "max_lat": 41,
-                "max_lon": -104,
-            },
-            temporal_agg_kwargs={"time_period": "day", "agg_method": "std"},
-            rolling_agg_kwargs={"window_size": 5, "agg_method": "mean"},
-        )
-
-
-def test_invalid_export_ipfs():
-    """Test invalid export format with IPFS source."""
-    with pytest.raises(InvalidExportFormatError):
-        client.geo_temporal_query(
-            dataset_name=KNOWN_STAC_DATASET_ID,
-            source="ipfs",
-            point_kwargs={
-                "latitude": KNOWN_STAC_COORD_LAT,
-                "longitude": KNOWN_STAC_COORD_LON,
-            },
-            output_format="GRIB",  # Invalid format
-        )
+# --- Error Handling Tests ---
+# Note: The old geo_temporal_query with source="ipfs" is deprecated.
+# Error validation tests for the new dClimateClient API are handled in
+# test_geo_temporal_query_ipfs_functional and other dClimateClient-specific tests.
 
 # --- Keep S3 Mocked Tests if necessary ---
 # These tests use the patch_s3 fixture if still needed for specific client logic testing
