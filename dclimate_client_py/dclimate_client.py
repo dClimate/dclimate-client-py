@@ -18,6 +18,7 @@ from .datasets import (
     fetch_cid_from_url,
     DATASET_CATALOG_INTERNAL,
     DatasetCatalog,
+    DatasetMetadata,
 )
 from .dclimate_zarr_errors import InvalidSelectionError
 
@@ -98,7 +99,10 @@ class dClimateClient:
         variant: typing.Optional[str] = None,
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
-    ) -> typing.Union[GeotemporalData, xr.Dataset]:
+    ) -> typing.Union[
+        typing.Tuple[GeotemporalData, DatasetMetadata],
+        typing.Tuple[xr.Dataset, DatasetMetadata]
+    ]:
         """
         Load a dClimate dataset from IPFS using the internal dataset catalog.
 
@@ -124,9 +128,13 @@ class dClimateClient:
 
         Returns
         -------
-        Union[GeotemporalData, xr.Dataset]
-            Loaded dataset, either wrapped in GeotemporalData (default) or as raw
-            xarray.Dataset if return_xarray=True.
+        Tuple[Union[GeotemporalData, xr.Dataset], DatasetMetadata]
+            A tuple containing:
+            - Loaded dataset, either wrapped in GeotemporalData (default) or as raw
+              xarray.Dataset if return_xarray=True.
+            - Metadata dict with information about the dataset including collection,
+              dataset name, variant, slug, CID used, URL (if applicable), timestamp
+              (if available), and source type.
 
         Raises
         ------
@@ -169,10 +177,22 @@ class dClimateClient:
                 kubo_cas=self._kubo_cas,
             )
 
+            # Build metadata for direct CID case
+            metadata: DatasetMetadata = {
+                "collection": collection or "unknown",
+                "dataset": dataset,
+                "variant": variant or "unknown",
+                "slug": dataset_slug,
+                "cid": cid,
+                "url": None,
+                "timestamp": None,
+                "source": "direct_cid",
+            }
+
             if return_xarray:
-                return ds
+                return ds, metadata
             else:
-                return GeotemporalData(ds, dataset_name=dataset_slug)
+                return GeotemporalData(ds, dataset_name=dataset_slug), metadata
 
         # Case 2: Normal resolution via catalog
         resolved = resolve_dataset_source(
@@ -184,8 +204,11 @@ class dClimateClient:
 
         # Get CID either directly or from URL
         final_cid = resolved["cid"]
+        url_fetch_result = None
+
         if not final_cid and resolved["url"]:
-            final_cid = fetch_cid_from_url(resolved["url"])
+            url_fetch_result = fetch_cid_from_url(resolved["url"])
+            final_cid = url_fetch_result["cid"]
 
         if not final_cid:
             raise InvalidSelectionError(
@@ -198,7 +221,19 @@ class dClimateClient:
             kubo_cas=self._kubo_cas,
         )
 
+        # Build metadata for catalog resolution case
+        metadata: DatasetMetadata = {
+            "collection": resolved["collection"],
+            "dataset": resolved["dataset"],
+            "variant": resolved["variant"],
+            "slug": resolved["slug"],
+            "cid": final_cid,
+            "url": resolved.get("url"),
+            "timestamp": url_fetch_result.get("timestamp") if url_fetch_result else None,
+            "source": "catalog",
+        }
+
         if return_xarray:
-            return ds
+            return ds, metadata
         else:
-            return GeotemporalData(ds, dataset_name=resolved["slug"])
+            return GeotemporalData(ds, dataset_name=resolved["slug"]), metadata

@@ -396,7 +396,7 @@ wheels = [
 
 [[package]]
 name = "dclimate-client-py"
-version = "0.1.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -406,7 +406,6 @@ dependencies = [
     { name = "py-hamt" },
     { name = "pyarrow" },
     { name = "pycryptodome" },
-    { name = "pytest-asyncio" },
     { name = "requests" },
     { name = "rioxarray" },
     { name = "s3fs" },
@@ -423,6 +422,7 @@ dev = [
 ]
 testing = [
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-mock" },
 ]
@@ -438,7 +438,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pycryptodome", specifier = ">=3.21.0" },
     { name = "pytest", marker = "extra == 'testing'" },
-    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+    { name = "pytest-asyncio", marker = "extra == 'testing'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'testing'" },
     { name = "pytest-mock", marker = "extra == 'testing'" },
     { name = "requests" },

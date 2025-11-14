@@ -30,12 +30,19 @@ async def main():
     async with dClimateClient() as dclimate:
         # Load datasets by name from the internal catalog
         # For datasets with multiple variants, you must specify which variant
-        dataset = await dclimate.load_dataset(
+        # Returns a tuple: (dataset, metadata)
+        dataset, metadata = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",  # Required for multi-variant datasets
             return_xarray=False   # Returns GeotemporalData wrapper (default)
         )
+
+        # Check metadata about what was loaded
+        print(f"Loaded: {metadata['slug']}")
+        print(f"CID: {metadata['cid']}")
+        print(f"Timestamp: {metadata.get('timestamp')}")  # If available from URL fetch
+        print(f"Source: {metadata['source']}")  # 'catalog' or 'direct_cid'
 
         # Apply queries using the GeotemporalData interface
         dataset_filtered = dataset.point(latitude=40.875, longitude=-104.875)
@@ -52,7 +59,7 @@ async def main_custom_ipfs():
         gateway_base_url="https://ipfs.io",
         rpc_base_url="http://localhost:5001"
     ) as dclimate:
-        dataset = await dclimate.load_dataset(
+        dataset, metadata = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -62,13 +69,14 @@ async def main_custom_ipfs():
 # Get raw xarray.Dataset directly
 async def main_xarray():
     async with dClimateClient() as dclimate:
-        xr_dataset = await dclimate.load_dataset(
+        xr_dataset, metadata = await dclimate.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
             return_xarray=True  # Returns xarray.Dataset
         )
         print(xr_dataset)
+        print(f"Dataset CID: {metadata['cid']}")
 
 # List available datasets in the catalog (synchronous helper)
 catalog = client.list_dataset_catalog()

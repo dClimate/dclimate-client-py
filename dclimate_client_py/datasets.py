@@ -61,6 +61,25 @@ class ResolvedDatasetSource(TypedDict):
     url: Optional[str]
 
 
+class UrlFetchResult(TypedDict, total=False):
+    """Result from fetching CID from URL endpoint."""
+    cid: str
+    dataset: Optional[str]
+    timestamp: Optional[int]  # Unix timestamp in milliseconds
+
+
+class DatasetMetadata(TypedDict, total=False):
+    """Metadata about a loaded dataset."""
+    collection: str
+    dataset: str
+    variant: str
+    slug: str  # Full dataset identifier (e.g., "era5/temp2m/finalized")
+    cid: str  # The actual CID used to load the dataset
+    url: Optional[str]  # URL if one was used in the resolution
+    timestamp: Optional[int]  # Unix timestamp in milliseconds when dataset was last updated
+    source: typing.Literal["catalog", "direct_cid"]  # How the dataset was loaded
+
+
 # --- Internal Dataset Catalog ---
 
 DATASET_CATALOG_INTERNAL: DatasetCatalog = [
@@ -518,18 +537,19 @@ def resolve_dataset_source(
     )
 
 
-def fetch_cid_from_url(url: str, timeout: int = 30) -> str:
+def fetch_cid_from_url(url: str, timeout: int = 30) -> UrlFetchResult:
     """
-    Fetch IPFS CID from a URL endpoint.
+    Fetch IPFS CID and metadata from a URL endpoint.
 
-    The endpoint should return JSON with a 'cid' field, or just the CID as plain text.
+    The endpoint should return JSON with a 'cid' field and optionally 'timestamp' and 'dataset' fields,
+    or just the CID as plain text.
 
     Args:
         url: The URL endpoint to fetch the CID from
         timeout: Request timeout in seconds (default: 30)
 
     Returns:
-        The IPFS CID string
+        UrlFetchResult with at minimum the CID, and optionally timestamp and dataset name
 
     Raises:
         IpfsConnectionError: If the request fails or CID cannot be extracted
@@ -547,7 +567,15 @@ def fetch_cid_from_url(url: str, timeout: int = 30) -> str:
                 cid = data.get("cid") or data.get("CID") or data.get("ipfs_cid")
                 if cid:
                     logger.info(f"Extracted CID from JSON response: {cid}")
-                    return str(cid)
+                    result: UrlFetchResult = {"cid": str(cid)}
+
+                    # Extract optional fields
+                    if "timestamp" in data:
+                        result["timestamp"] = int(data["timestamp"])
+                    if "dataset" in data:
+                        result["dataset"] = str(data["dataset"])
+
+                    return result
                 else:
                     raise IpfsConnectionError(
                         f"No 'cid' field found in JSON response from {url}. "
@@ -556,7 +584,7 @@ def fetch_cid_from_url(url: str, timeout: int = 30) -> str:
             elif isinstance(data, str):
                 # JSON string containing just the CID
                 logger.info(f"Extracted CID from JSON string: {data}")
-                return data.strip()
+                return {"cid": data.strip()}
             else:
                 raise IpfsConnectionError(
                     f"Unexpected JSON response type from {url}: {type(data)}"
@@ -566,7 +594,7 @@ def fetch_cid_from_url(url: str, timeout: int = 30) -> str:
             cid = response.text.strip()
             if cid:
                 logger.info(f"Extracted CID from plain text response: {cid}")
-                return cid
+                return {"cid": cid}
             else:
                 raise IpfsConnectionError(f"Empty response from URL: {url}")
 

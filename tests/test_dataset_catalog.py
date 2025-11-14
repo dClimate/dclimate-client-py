@@ -250,7 +250,7 @@ async def test_load_dataset_direct_cid(mock_get_dataset, mock_xarray_dataset):
 
     async with dClimateClient() as client:
 
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
         )
@@ -263,6 +263,10 @@ async def test_load_dataset_direct_cid(mock_get_dataset, mock_xarray_dataset):
         # Should return GeotemporalData by default
         assert isinstance(result, GeotemporalData)
 
+        # Check metadata
+        assert metadata["cid"] == "bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
+        assert metadata["source"] == "direct_cid"
+
 
 @patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
 @pytest.mark.asyncio
@@ -270,7 +274,7 @@ async def test_load_dataset_return_xarray(mock_get_dataset, mock_xarray_dataset)
     """Test loading dataset and returning raw xarray.Dataset."""
     mock_get_dataset.return_value = mock_xarray_dataset
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u",
             return_xarray=True
@@ -279,6 +283,7 @@ async def test_load_dataset_return_xarray(mock_get_dataset, mock_xarray_dataset)
         # Should return xarray.Dataset
         assert isinstance(result, xr.Dataset)
         assert result is mock_xarray_dataset
+        assert metadata["cid"] == "bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
 
 
 @patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
@@ -287,7 +292,7 @@ async def test_load_dataset_single_variant(mock_get_dataset, mock_xarray_dataset
     """Test loading dataset with explicit variant."""
     mock_get_dataset.return_value = mock_xarray_dataset
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -298,6 +303,12 @@ async def test_load_dataset_single_variant(mock_get_dataset, mock_xarray_dataset
 
         # Should return GeotemporalData
         assert isinstance(result, GeotemporalData)
+
+        # Check metadata
+        assert metadata["collection"] == "era5"
+        assert metadata["dataset"] == "2m_temperature"
+        assert metadata["variant"] == "finalized"
+        assert metadata["source"] == "catalog"
 
 
 @pytest.mark.asyncio
@@ -322,7 +333,7 @@ async def test_load_dataset_single_variant_autodetect(mock_get_dataset, mock_xar
 
     async with dClimateClient() as client:
         # IFS temp2m has only one variant, so should load without specifying variant
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="temperature",
             collection="ifs",
             return_xarray=True
@@ -333,6 +344,7 @@ async def test_load_dataset_single_variant_autodetect(mock_get_dataset, mock_xar
 
         # Should return xarray.Dataset
         assert isinstance(result, xr.Dataset)
+        assert metadata["collection"] == "ifs"
 
 @pytest.mark.asyncio
 async def test_load_dataset_collection_not_found():
@@ -376,7 +388,7 @@ async def test_load_dataset_with_gateway_config(mock_get_dataset, mock_xarray_da
         rpc_base_url="http://localhost:5001"
     ) as client:
 
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -387,6 +399,7 @@ async def test_load_dataset_with_gateway_config(mock_get_dataset, mock_xarray_da
 
         # Should return GeotemporalData
         assert isinstance(result, GeotemporalData)
+        assert metadata["source"] == "catalog"
 
 
 # --- Test Concatenation Logic ---
@@ -472,7 +485,7 @@ async def test_full_workflow_explicit_variant(mock_get_dataset, mock_xarray_data
 
     async with dClimateClient() as client:
 
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant=variant_name
@@ -480,6 +493,7 @@ async def test_full_workflow_explicit_variant(mock_get_dataset, mock_xarray_data
 
         assert isinstance(result, GeotemporalData)
         mock_get_dataset.assert_called_once()
+        assert metadata["variant"] == variant_name
     
 @pytest.mark.asyncio
 async def test_full_workflow_with_explicit_variant():
@@ -490,7 +504,7 @@ async def test_full_workflow_with_explicit_variant():
     # Step 2: Load with explicit variant (required for multi-variant datasets)
     # Note: Auto-concatenation is disabled due to xarray lazy concat limitations
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",  # Must specify variant for multi-variant datasets
@@ -498,6 +512,7 @@ async def test_full_workflow_with_explicit_variant():
         )
 
         assert isinstance(result, xr.Dataset)
+        assert metadata["variant"] == "finalized"
 
 
 # --- Test dClimateClient ---
@@ -510,7 +525,7 @@ async def test_dclimate_client_basic(mock_load_dataset, mock_xarray_dataset):
     mock_load_dataset.return_value = mock_xarray_dataset
 
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
@@ -522,6 +537,9 @@ async def test_dclimate_client_basic(mock_load_dataset, mock_xarray_dataset):
         # Should have called the internal load function
         mock_load_dataset.assert_called_once()
 
+        # Check metadata
+        assert metadata["collection"] == "era5"
+
 
 @pytest.mark.asyncio
 @patch("dclimate_client_py.dclimate_client._load_dataset_from_ipfs_cid")
@@ -530,7 +548,7 @@ async def test_dclimate_client_return_xarray(mock_load_dataset, mock_xarray_data
     mock_load_dataset.return_value = mock_xarray_dataset
 
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -540,6 +558,7 @@ async def test_dclimate_client_return_xarray(mock_load_dataset, mock_xarray_data
         # Should return raw xarray.Dataset
         assert isinstance(result, xr.Dataset)
         assert result is mock_xarray_dataset
+        assert metadata["dataset"] == "2m_temperature"
 
 
 @pytest.mark.asyncio
@@ -549,7 +568,7 @@ async def test_dclimate_client_with_cid(mock_load_dataset, mock_xarray_dataset):
     mock_load_dataset.return_value = mock_xarray_dataset
 
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="test",
             cid="bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
         )
@@ -561,6 +580,7 @@ async def test_dclimate_client_with_cid(mock_load_dataset, mock_xarray_dataset):
         assert call_kwargs["ipfs_cid"] == "bafyr4iacuutc5bgmirkfyzn4igi2wys7e42kkn674hx3c4dv4wrgjp2k2u"
 
         assert isinstance(result, GeotemporalData)
+        assert metadata["source"] == "direct_cid"
 
 
 @pytest.mark.asyncio
@@ -573,13 +593,14 @@ async def test_dclimate_client_custom_endpoints(mock_load_dataset, mock_xarray_d
         gateway_base_url="https://ipfs.io",
         rpc_base_url="http://localhost:5001"
     ) as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized"
         )
 
         assert isinstance(result, GeotemporalData)
+        assert metadata["source"] == "catalog"
         # KuboCAS should have been initialized with custom endpoints
         # (we can't easily test this without inspecting internals, but coverage will show it)
 
@@ -634,7 +655,7 @@ async def test_dclimate_client_workflow():
 
     # Use client to load dataset
     async with dClimateClient() as client:
-        result = await client.load_dataset(
+        result, metadata = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -643,9 +664,10 @@ async def test_dclimate_client_workflow():
 
         # Verify result is GeotemporalData
         assert isinstance(result, GeotemporalData)
-        
+        assert metadata["source"] == "catalog"
+
         # load again with return_xarray=True
-        result_xr = await client.load_dataset(
+        result_xr, metadata_xr = await client.load_dataset(
             dataset="2m_temperature",
             collection="era5",
             variant="finalized",
@@ -658,12 +680,13 @@ async def test_dclimate_client_workflow():
         assert point_dataset["2m_temperature"].values == 274.18854
 
         # load again with return_xarray=True
-        result_xr = await client.load_dataset(
+        result_xr, metadata_aifs = await client.load_dataset(
             dataset="temperature",
             collection="aifs",
             variant="single",
             return_xarray=True
         )
+        assert metadata_aifs["collection"] == "aifs"
 
 if __name__ == "__main__":
     # Allow running this test file directly

@@ -122,7 +122,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         # Point query
         try:
             # Load the dataset once
-            dataset = await dclimate.load_dataset(
+            dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",
@@ -168,7 +168,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         # Rectangle query + NetCDF output
         try:
             # Load the dataset again for rectangle query
-            dataset = await dclimate.load_dataset(
+            dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",
@@ -216,7 +216,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         # Basic spatial aggregation (mean over a small box)
         try:
             # Load the dataset again for spatial aggregation query
-            dataset = await dclimate.load_dataset(
+            dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
                 dataset="2m_temperature",
                 variant="finalized",
