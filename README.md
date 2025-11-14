@@ -13,6 +13,8 @@ Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structur
 
 Filtering and aggregation are packaged into convenience functions optimized for flexibility and performance.
 
+> **Looking for JavaScript?** Check out our [JavaScript client](https://www.npmjs.com/package/@dclimate/dclimate-client-js) for Node.js and browser environments.
+
 ## Usage
 
 ```python
