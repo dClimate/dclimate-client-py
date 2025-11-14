@@ -5,16 +5,16 @@ requires = ["pdm-backend==2.4.3"]
 build-backend = "pdm.backend"
 
 [project]
-name = "dclimate_client_py"
+name = "dclimate-client-py"
 version = "0.1.0" # Set a static version or handle it in versioning strategy
 description = "Python client library for accessing dClimate weather and climate data"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
+    { name = "Phil Van Meppelen Scheppink", email = "phil@dclimate.net" },
     { name = "Evan Schechter", email = "evan@arbol.io" },
     { name = "Chris Rossi", email = "chris@christophermrossi.com" },
     { name = "Robert Banick", email = "robert.banick@arbol.io" },
-    { name = "Phil Van Meppelen Scheppink", email = "phil@dclimate.net" },
 ]
 requires-python = ">=3.12"
 keywords = ["climate", "weather", "data", "dclimate", "meteorology", "climate-data"]
