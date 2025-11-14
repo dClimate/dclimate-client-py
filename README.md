@@ -1,5 +1,11 @@
-[![codecov](https://codecov.io/gh/dClimate/dClimate-Zarr-Client/graph/badge.svg?token=AovaMO6DX5)](https://codecov.io/gh/dClimate/dClimate-Zarr-Client)
+<p align="center">
+<a href="https://dclimate.net/" target="_blank" rel="noopener noreferrer">
+<img width="50%" src="https://user-images.githubusercontent.com/41392423/173133333-79ef15d0-6671-4be3-ac97-457344e9e958.svg" alt="dClimate logo">
+</a>
+</p>
+
 # dClimate-Client-Py
+[![codecov](https://codecov.io/gh/dClimate/dClimate-Zarr-Client/graph/badge.svg?token=AovaMO6DX5)](https://codecov.io/gh/dClimate/dClimate-Zarr-Client)
 Retrieve dClimate GIS zarr datasets stored on IPFS
 
 Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structures stored efficiently on IPFS.
