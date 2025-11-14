@@ -6,6 +6,7 @@
 
 # dClimate-Client-Py
 [![codecov](https://codecov.io/gh/dClimate/dClimate-Zarr-Client/graph/badge.svg?token=AovaMO6DX5)](https://codecov.io/gh/dClimate/dClimate-Zarr-Client)
+
 Retrieve dClimate GIS zarr datasets stored on IPFS
 
 Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structures stored efficiently on IPFS.
