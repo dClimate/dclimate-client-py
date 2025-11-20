@@ -1,0 +1,75 @@
+name: Client Sync Check
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Python client
+        uses: actions/checkout@v4
+        with:
+          path: dclimate-client-py
+
+      - name: Checkout JS client
+        uses: actions/checkout@v4
+        with:
+          repository: dClimate/dclimate-client-js
+          ref: main
+          path: dclimate-client-js
+
+      - name: Checkout client-audit
+        uses: actions/checkout@v4
+        with:
+          repository: dClimate/client-audit
+          path: client-audit
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Install Python dependencies
+        working-directory: dclimate-client-py
+        run: uv sync --extra dev --extra testing
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install JS dependencies
+        working-directory: dclimate-client-js
+        run: |
+          yarn install --frozen-lockfile
+          yarn build
+
+      - name: Update client-audit to use local clients
+        working-directory: client-audit
+        run: |
+          # Update package.json to use local JS client
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.dependencies['@dclimate/dclimate-client-js'] = 'file:../dclimate-client-js';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Install client-audit dependencies
+        working-directory: client-audit
+        run: yarn install --frozen-lockfile
+
+      - name: Run comparison tests
+        working-directory: client-audit
+        run: yarn compare
