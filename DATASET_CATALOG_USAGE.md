@@ -248,9 +248,6 @@ The internal catalog (`DATASET_CATALOG_INTERNAL`) contains:
     ]
 }
 ```
-
-**Note**: The example CIDs in the current catalog are placeholders. You'll need to update [datasets.py](dclimate_client_py/datasets.py) with real CIDs for your datasets.
-
 ## Error Handling
 
 The new functions provide helpful error messages:
@@ -321,32 +318,6 @@ The catalog structure supports features that can be added in the future:
 3. **STAC integration**: Keep STAC support for dynamic dataset discovery
 4. **Metadata enrichment**: Add more metadata fields (descriptions, spatial/temporal extent, etc.)
 5. **Custom catalogs**: Users can provide their own catalog definitions
-
-## Updating the Catalog
-
-To add new datasets to the catalog, edit [datasets.py](dclimate_client_py/datasets.py):
-
-```python
-DATASET_CATALOG_INTERNAL: DatasetCatalog = [
-    {
-        "collection": "your-collection",
-        "datasets": [
-            {
-                "dataset": "your-dataset",
-                "variants": [
-                    {
-                        "variant": "your-variant",
-                        "cid": "bafybei...",  # Your IPFS CID
-                        "concat_priority": 1,  # Optional: for auto-concat
-                        "concat_dimension": "time"  # Optional: concat dimension
-                    }
-                ]
-            }
-        ]
-    },
-    # ... existing collections
-]
-```
 
 ## Comparison with dclimate-client-js
 

@@ -18,12 +18,6 @@ from .ipfs_retrieval import (
     _get_dataset_by_ipfs_cid,
 )
 from .datasets import (
-    resolve_dataset_source,
-    get_concatenable_variants,
-    find_dataset_by_name,
-    find_collection_by_name,
-    fetch_cid_from_url,
-    DATASET_CATALOG_INTERNAL,
     DatasetCatalog,
 )
 from .concatenate import concatenate_datasets

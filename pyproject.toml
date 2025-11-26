@@ -43,6 +43,7 @@ dependencies = [
     "shapely",
     "scipy",
     "pycryptodome>=3.21.0",
+    "pystac>=1.10.0",
 ]
 
 [project.urls]

@@ -9,24 +9,26 @@ from .encryption_codec import (
     EncryptionCodec,
 )
 from .datasets import (
-    list_dataset_catalog,
-    fetch_cid_from_url,
     DatasetCatalog,
     CatalogCollection,
     CatalogDataset,
     DatasetVariantConfig,
+)
+from .stac_catalog import (
+    load_stac_catalog,
+    list_available_datasets,
 )
 
 __all__ = [
     "dClimateClient",
     "load_s3",
     "geo_temporal_query",
-    "list_dataset_catalog",
-    "fetch_cid_from_url",
     "GeotemporalData",
     "EncryptionCodec",
     "DatasetCatalog",
     "CatalogCollection",
     "CatalogDataset",
     "DatasetVariantConfig",
+    "load_stac_catalog",
+    "list_available_datasets",
 ]

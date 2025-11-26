@@ -406,6 +406,7 @@ dependencies = [
     { name = "py-hamt" },
     { name = "pyarrow" },
     { name = "pycryptodome" },
+    { name = "pystac" },
     { name = "requests" },
     { name = "rioxarray" },
     { name = "s3fs" },
@@ -437,6 +438,7 @@ requires-dist = [
     { name = "py-hamt", specifier = ">=3.2.0" },
     { name = "pyarrow" },
     { name = "pycryptodome", specifier = ">=3.21.0" },
+    { name = "pystac", specifier = ">=1.10.0" },
     { name = "pytest", marker = "extra == 'testing'" },
     { name = "pytest-asyncio", marker = "extra == 'testing'", specifier = ">=1.3.0" },
     { name = "pytest-cov", marker = "extra == 'testing'" },
@@ -1203,6 +1205,18 @@ name = "pyskein"
 version = "1.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/0e/43/6a3ad76f2ee622348bdef997eab334a3fb45437b7709f618f9622408d384/pyskein-1.0.tar.gz", hash = "sha256:691d61880e535fad874478cad776c759667c55c0fd6fc614264be78aa021b1ea", size = 262990 }
+
+[[package]]
+name = "pystac"
+version = "1.14.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/bf/e0d6f143b878a16f2117f24ba73f19a482d081d691bc086a9354b6e0ef24/pystac-1.14.1.tar.gz", hash = "sha256:4def289ab2168d67492ed0b5a3bd738d3dfa42390a50563776bfd1558af38d53", size = 163434 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/01/eb465e19137b36ba683417e982907aa9c7df1fb0b968e1424e5d678ba0dc/pystac-1.14.1-py3-none-any.whl", hash = "sha256:19d73306d8fb94fbd66b7945ee5510e3574c8d48462f86e1e91e3f257b79722b", size = 207710 },
+]
 
 [[package]]
 name = "pytest"
