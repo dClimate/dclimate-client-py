@@ -1,338 +1,569 @@
 # Dataset Catalog Usage Guide
 
-This document explains how to use the new dataset catalog functionality in dclimate-zarr-client, which provides similar features to dclimate-client-js.
+This document explains how to use the STAC-based dataset catalog functionality in dclimate-client-py.
 
 ## Overview
 
-The new functionality includes:
+dClimate uses the [STAC (SpatioTemporal Asset Catalog)](https://stacspec.org/) standard for organizing and discovering datasets stored on IPFS. The client provides a high-level interface that makes it easy to discover and load datasets without managing CIDs directly.
 
-1. **`load_dataset()`** - Main entry point for loading datasets from the catalog
-2. **`list_dataset_catalog()`** - List all available datasets in the catalog
-3. **Dataset catalog structure** - Internal catalog of datasets with collections, variants, and CIDs
+### Key Features
 
-**Note:** Auto-concatenation of variants is currently disabled due to xarray's lazy concatenation not being fully supported. Users must explicitly specify a variant for datasets with multiple variants. The catalog maintains `concat_priority` and `concat_dimension` metadata for future use when lazy concatenation becomes available.
+1. **STAC Catalog Integration** - Uses industry-standard STAC format for dataset discovery
+2. **Automatic CID Resolution** - Datasets are resolved from logical names to IPFS CIDs automatically
+3. **Dataset Discovery** - List and browse available datasets and collections
+4. **Variant Support** - Handle multiple variants of datasets (e.g., forecasts with different ensemble members)
+5. **IPFS Transparency** - The client handles all IPFS gateway interactions automatically
 
-## Key Features
+## Quick Start
 
-### 1. Load Datasets by Name
+### Basic Usage with dClimateClient
 
-Instead of manually managing CIDs, you can now load datasets by their logical names:
+The recommended way to use the catalog is through the `dClimateClient` async context manager:
 
 ```python
-from dclimate_client_py import load_dataset
+from dclimate_client_py import dClimateClient
+import asyncio
 
-# Load a specific variant
-ds = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="finalized"
-)
+async def main():
+    async with dClimateClient() as client:
+        # List available datasets
+        datasets = client.list_datasets()
+
+        # Print collections and their dataset types
+        for collection_id, info in datasets.items():
+            print(f"{info['title']} ({collection_id})")
+            print(f"  Types: {', '.join(info['types'])}")
+
+        # Load a specific dataset
+        data, metadata = await client.load_dataset(
+            collection="ifs",
+            dataset="temperature",
+            variant="single"  # Specify variant if multiple exist
+        )
+
+        # Work with the data
+        print(f"Loaded: {metadata['slug']}")
+        print(f"CID: {metadata['cid']}")
+        print(f"Source: {metadata['source']}")  # Will be 'stac'
+
+asyncio.run(main())
 ```
 
-### 2. Explicit Variant Selection
+### Low-Level STAC Catalog Access
 
-For datasets with multiple variants, you must explicitly specify which variant to load:
-
-```python
-# Load the finalized variant
-ds = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="finalized"  # Required for multi-variant datasets
-)
-
-# Or load the non-finalized variant
-ds = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="non-finalized"
-)
-
-# Note: Auto-concatenation is currently disabled due to xarray's
-# lazy concatenation not being fully supported
-```
-
-### 3. Get Raw xarray.Dataset
-
-If you don't want the GeotemporalData wrapper, you can get the raw xarray Dataset:
+For more control, you can work with the STAC catalog directly:
 
 ```python
-# Get raw xarray.Dataset instead of GeotemporalData
-xr_ds = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="finalized",
-    return_xarray=True
+from dclimate_client_py import (
+    load_stac_catalog,
+    list_available_datasets,
+    resolve_dataset_cid_from_stac,
 )
-```
 
-### 4. List Available Datasets
+# Load the STAC catalog from IPFS
+catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
 
-Discover what datasets are available in the catalog with multiple output formats:
+# List all available datasets
+datasets = list_available_datasets(catalog)
 
-```python
-from dclimate_client_py import list_dataset_catalog
-
-catalog = list_dataset_catalog()
-
-# Catalog structure (CIDs and URLs are stripped by default):
-# [
-#     {
-#         "collection": "era5",
-#         "datasets": [
-#             {
-#                 "dataset": "temp2m",
-#                 "variants": [
-#                     {
-#                         "variant": "finalized",
-#                         "concat_priority": 1,
-#                         "concat_dimension": "time"
-#                     },
-#                     {
-#                         "variant": "non-finalized",
-#                         "concat_priority": 2,
-#                         "concat_dimension": "time"
-#                     }
-#                 ]
-#             }
-#         ]
+# Example output structure:
+# {
+#     "ifs": {
+#         "id": "ifs",
+#         "title": "Integrated Forecasting System",
+#         "types": ["temperature", "precipitation", "wind_u", "wind_v"]
+#     },
+#     "era5": {
+#         "id": "era5",
+#         "title": "ERA5 Reanalysis",
+#         "types": ["2m_temperature", "total_precipitation"]
 #     }
-# ]
+# }
 
-# To get full catalog with CIDs and URLs:
-# catalog_with_sources = list_dataset_catalog(include_sources=True)
-
-# Get catalog as formatted JSON string:
-# json_output = list_dataset_catalog(format="json")
-# print(json_output)
-
-# Get catalog as pretty-printed string (recommended for display):
-pretty_output = list_dataset_catalog(format="pretty")
-print(pretty_output)
-# Output:
-# ================================================================================
-# dClimate Dataset Catalog
-# ================================================================================
-#
-# 📦 Collection: era5
-# --------------------------------------------------------------------------------
-#   📊 Dataset: 2m_temperature
-#     ├─ Variant: finalized
-#     │  ├─ Concat Priority: 1
-#     │  └─ Concat Dimension: time
-#     ├─ Variant: non-finalized
-#     │  ├─ Concat Priority: 2
-#     │  └─ Concat Dimension: time
-#
-# ...
-
-# Or iterate through the catalog structure:
-for collection in catalog:
-    print(f"Collection: {collection['collection']}")
-    for dataset in collection['datasets']:
-        print(f"  Dataset: {dataset['dataset']}")
-        for variant in dataset['variants']:
-            print(f"    Variant: {variant['variant']}")
-```
-
-### 5. Direct CID Loading
-
-You can still load datasets directly by CID, bypassing catalog resolution:
-
-```python
-ds = load_dataset(
-    dataset="temp2m",  # Used for metadata only
-    cid="bafybeibg5o7c3hzj4eyhwvqq4fkzp6rw7gm5vu5f5qvj2p7v5zq2w2y3x4"
+# Resolve a specific dataset to its CID
+cid = resolve_dataset_cid_from_stac(
+    catalog=catalog,
+    collection="ifs",
+    dataset="temperature",
+    variant="single"  # Optional, only needed if dataset has multiple variants
 )
+
+print(f"Dataset CID: {cid}")
 ```
 
-## Complete API Reference
+## STAC Catalog Structure
 
-### `load_dataset()`
+The dClimate STAC catalog follows this hierarchy:
+
+```
+Root Catalog (ipfs://...)
+├── Collection: ifs
+│   ├── Item: ifs-temperature-single
+│   │   └── Asset: data (ipfs://... -> Zarr dataset)
+│   ├── Item: ifs-temperature-ensemble
+│   │   └── Asset: data (ipfs://... -> Zarr dataset)
+│   └── Item: ifs-precipitation-single
+│       └── Asset: data (ipfs://... -> Zarr dataset)
+├── Collection: era5
+│   ├── Item: era5-2m_temperature-finalized
+│   │   └── Asset: data (ipfs://... -> Zarr dataset)
+│   └── Item: era5-total_precipitation-finalized
+│       └── Asset: data (ipfs://... -> Zarr dataset)
+└── Collection: aifs
+    └── ...
+```
+
+### Catalog Components
+
+- **Root Catalog**: Entry point containing links to all collections
+- **Collections**: Groups of related datasets (e.g., "ifs", "era5", "aifs")
+  - Each collection has a `dclimate:id` field for identification
+  - Collections have a `dclimate:types` field listing available dataset types
+- **Items**: Individual dataset variants following the pattern `{collection}-{dataset}-{variant}`
+- **Assets**: Links to the actual Zarr data on IPFS (usually under the "data" asset key)
+
+## API Reference
+
+### `dClimateClient.load_dataset()`
+
+Load a dataset using the managed STAC catalog.
 
 ```python
-load_dataset(
-    dataset: str,                           # Required: dataset name
-    collection: Optional[str] = None,       # Collection name (auto-detected if omitted)
-    variant: Optional[str] = None,          # Variant name (or use auto_concatenate)
-    cid: Optional[str] = None,              # Direct CID override
-    gateway_uri_stem: Optional[str] = None, # Custom IPFS gateway
-    rpc_uri_stem: Optional[str] = None,     # Custom IPFS RPC
-    return_xarray: bool = False,            # Return xarray.Dataset instead of GeotemporalData
-    catalog: Optional[DatasetCatalog] = None # Custom catalog
-    # Note: auto_concatenate parameter has been removed
-) -> Union[GeotemporalData, xr.Dataset]
+async def load_dataset(
+    dataset: str,                    # Dataset name (e.g., "temperature")
+    collection: str,                 # Collection ID (e.g., "ifs")
+    variant: Optional[str] = None,   # Variant name (e.g., "single", "ensemble")
+    cid: Optional[str] = None,       # Direct CID override (bypasses STAC)
+    return_xarray: bool = False,     # Return raw xarray.Dataset instead of GeotemporalData
+) -> Union[
+    Tuple[GeotemporalData, DatasetMetadata],
+    Tuple[xr.Dataset, DatasetMetadata]
+]
 ```
-
-### `list_dataset_catalog()`
-
-```python
-list_dataset_catalog(
-    catalog: Optional[DatasetCatalog] = None,
-    include_sources: bool = False,
-    format: Optional[str] = None  # Options: None, "json", "pretty"
-) -> Union[DatasetCatalog, str]
-```
-
-Returns a deep copy of the dataset catalog with CIDs and URLs stripped out by default for security and cleaner output.
 
 **Parameters:**
-- `include_sources`: If `True`, include CID and URL information (default: `False`)
-- `format`: Output format options:
-  - `None` (default): Return as Python dict/list structure
-  - `"json"`: Return as formatted JSON string
-  - `"pretty"`: Return as human-readable formatted string with visual hierarchy
+- `dataset`: The dataset type name (see `list_datasets()` for available types)
+- `collection`: The collection ID containing the dataset
+- `variant`: Optional variant name. Required if the dataset has multiple variants
+- `cid`: Optional direct CID to bypass STAC catalog resolution
+- `return_xarray`: If True, return raw `xarray.Dataset`, otherwise return `GeotemporalData` wrapper
 
-## Concatenation Metadata (For Future Use)
+**Returns:**
+- Tuple of (dataset, metadata)
+  - `dataset`: Either `GeotemporalData` or `xarray.Dataset` depending on `return_xarray`
+  - `metadata`: Dictionary with keys:
+    - `collection`: Collection ID
+    - `dataset`: Dataset name
+    - `variant`: Variant name
+    - `slug`: Full dataset identifier (collection/dataset/variant)
+    - `cid`: IPFS CID that was loaded
+    - `source`: Either "stac" or "direct_cid"
+    - `url`: Always None for STAC-based loading
+    - `timestamp`: Always None for STAC-based loading
 
-The catalog maintains concatenation metadata for future use when xarray's lazy concatenation is fully supported:
+**Raises:**
+- `RuntimeError`: If client is not used as async context manager
+- `InvalidSelectionError`: If collection is not provided when using STAC resolution
+- `ValueError`: If dataset, collection, or variant is not found in STAC catalog
 
-1. **`concat_priority`**: Variants are ordered by priority (lower number = higher priority)
-2. **`concat_dimension`**: The dimension along which variants should be concatenated (typically "time")
-
-### Example: ERA5 Temperature Data
-
-```python
-# ERA5 temp2m has two variants with concatenation metadata:
-# - "finalized": Historical data up to ~5 days ago (concat_priority: 1)
-# - "non-finalized": Recent data including last 5 days (concat_priority: 2)
-
-# Currently, you must load each variant separately:
-finalized = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="finalized"
-)
-
-non_finalized = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="non-finalized"
-)
-
-# Manual concatenation is possible but may trigger eager loading for large datasets
-# Auto-concatenation will be re-enabled when xarray supports lazy concat
-```
-
-## Dataset Catalog Structure
-
-The internal catalog (`DATASET_CATALOG_INTERNAL`) contains:
-
-### Current Datasets (Example)
+**Examples:**
 
 ```python
-{
-    "collection": "era5",
-    "datasets": [
-        {
-            "dataset": "temp2m",
-            "variants": [
-                {
-                    "variant": "finalized",
-                    "cid": "bafybei...",
-                    "concat_priority": 1,
-                    "concat_dimension": "time"
-                },
-                {
-                    "variant": "non-finalized",
-                    "cid": "bafybei...",
-                    "concat_priority": 2,
-                    "concat_dimension": "time"
-                }
-            ]
-        },
-        {
-            "dataset": "precip",
-            "variants": [...]
-        }
-    ]
-}
+# Basic usage
+async with dClimateClient() as client:
+    data, metadata = await client.load_dataset(
+        collection="ifs",
+        dataset="temperature",
+        variant="single"
+    )
+
+# Get raw xarray.Dataset
+async with dClimateClient() as client:
+    xr_ds, metadata = await client.load_dataset(
+        collection="era5",
+        dataset="2m_temperature",
+        variant="finalized",
+        return_xarray=True
+    )
+
+# Load with direct CID (bypasses STAC)
+async with dClimateClient() as client:
+    data, metadata = await client.load_dataset(
+        dataset="temperature",  # Used for metadata only
+        collection="ifs",
+        cid="bafybeiabc123..."
+    )
+    # metadata['source'] will be 'direct_cid'
 ```
+
+### `dClimateClient.list_datasets()`
+
+List all available datasets from the STAC catalog.
+
+```python
+def list_datasets() -> Dict[str, Dict[str, Any]]
+```
+
+**Returns:**
+- Dictionary mapping collection IDs to collection metadata:
+  ```python
+  {
+      "collection_id": {
+          "id": "collection_id",
+          "title": "Collection Title",
+          "types": ["dataset_type1", "dataset_type2", ...]
+      },
+      ...
+  }
+  ```
+
+**Example:**
+
+```python
+async with dClimateClient() as client:
+    datasets = client.list_datasets()
+
+    # Iterate through collections
+    for collection_id, info in datasets.items():
+        print(f"{info['title']} ({collection_id})")
+        for dataset_type in info['types']:
+            print(f"  - {dataset_type}")
+```
+
+### `load_stac_catalog()`
+
+Low-level function to load the STAC catalog from IPFS.
+
+```python
+def load_stac_catalog(
+    gateway_url: str,
+    root_cid: Optional[str] = None
+) -> pystac.Catalog
+```
+
+**Parameters:**
+- `gateway_url`: IPFS HTTP gateway URL (e.g., "https://ipfs-gateway.dclimate.net")
+- `root_cid`: Optional specific catalog CID. If None, fetches latest from API
+
+**Returns:**
+- `pystac.Catalog`: Loaded STAC catalog object
+
+**Example:**
+
+```python
+from dclimate_client_py import load_stac_catalog
+
+# Load latest catalog
+catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+
+# Load specific catalog version
+catalog = load_stac_catalog(
+    "https://ipfs-gateway.dclimate.net",
+    root_cid="bafybeiabc123..."
+)
+```
+
+### `list_available_datasets()`
+
+Low-level function to list datasets from a loaded STAC catalog.
+
+```python
+def list_available_datasets(
+    catalog: pystac.Catalog
+) -> Dict[str, Dict[str, Any]]
+```
+
+**Parameters:**
+- `catalog`: A loaded pystac.Catalog object
+
+**Returns:**
+- Dictionary of collections and their dataset types (same structure as `dClimateClient.list_datasets()`)
+
+**Example:**
+
+```python
+from dclimate_client_py import load_stac_catalog, list_available_datasets
+
+catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+datasets = list_available_datasets(catalog)
+
+for collection_id, info in datasets.items():
+    print(f"{info['title']}: {len(info['types'])} dataset types")
+```
+
+### `resolve_dataset_cid_from_stac()`
+
+Low-level function to resolve a dataset name to its IPFS CID.
+
+```python
+def resolve_dataset_cid_from_stac(
+    catalog: pystac.Catalog,
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None
+) -> str
+```
+
+**Parameters:**
+- `catalog`: Loaded STAC catalog
+- `collection`: Collection ID
+- `dataset`: Dataset type name
+- `variant`: Optional variant name
+
+**Returns:**
+- `str`: IPFS CID (without "ipfs://" prefix)
+
+**Raises:**
+- `ValueError`: If collection, dataset, or variant is not found
+
+**Example:**
+
+```python
+from dclimate_client_py import load_stac_catalog, resolve_dataset_cid_from_stac
+
+catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+
+# Resolve dataset to CID
+cid = resolve_dataset_cid_from_stac(
+    catalog=catalog,
+    collection="ifs",
+    dataset="temperature",
+    variant="single"
+)
+
+print(f"Dataset CID: {cid}")
+```
+
+### `get_root_catalog_cid()`
+
+Fetch the latest STAC catalog CID from the dClimate API.
+
+```python
+def get_root_catalog_cid() -> str
+```
+
+**Returns:**
+- `str`: The IPFS CID of the latest root STAC catalog
+
+**Raises:**
+- `requests.HTTPError`: If the API request fails
+- `KeyError`: If response doesn't contain expected 'cid' field
+
+**Example:**
+
+```python
+from dclimate_client_py.stac_catalog import get_root_catalog_cid
+
+cid = get_root_catalog_cid()
+print(f"Latest catalog CID: {cid}")
+```
+
+## Working with Variants
+
+Many datasets have multiple variants (e.g., different forecast ensemble members, finalized vs non-finalized data). The STAC catalog uses item IDs following the pattern: `{collection}-{dataset}-{variant}`
+
+### Finding Variants
+
+```python
+async with dClimateClient() as client:
+    # Load catalog and navigate to a collection
+    catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+
+    # Get child links
+    for link in catalog.get_child_links():
+        if link.extra_fields.get("dclimate:id") == "ifs":
+            collection = link.resolve_stac_object(root=catalog).target
+
+            # List all items (dataset variants)
+            for item in collection.get_items():
+                print(f"Item ID: {item.id}")
+                # Example output: ifs-temperature-single
+                #                 ifs-temperature-ensemble
+                #                 ifs-precipitation-single
+```
+
+### Loading Specific Variants
+
+```python
+async with dClimateClient() as client:
+    # Load single-member variant
+    single, meta = await client.load_dataset(
+        collection="ifs",
+        dataset="temperature",
+        variant="single"
+    )
+
+    # Load ensemble variant
+    ensemble, meta = await client.load_dataset(
+        collection="ifs",
+        dataset="temperature",
+        variant="ensemble"
+    )
+```
+
+## Custom IPFS Endpoints
+
+You can use custom IPFS gateways and RPC endpoints:
+
+```python
+async with dClimateClient(
+    gateway_base_url="http://localhost:8080",
+    rpc_base_url="http://localhost:5001"
+) as client:
+    data, metadata = await client.load_dataset(
+        collection="ifs",
+        dataset="temperature",
+        variant="single"
+    )
+```
+
 ## Error Handling
 
-The new functions provide helpful error messages:
+The STAC catalog integration provides clear error messages:
 
 ```python
-from dclimate_client_py import load_dataset
-from dclimate_client_py.dclimate_zarr_errors import (
-    DatasetNotFoundError,
-    CollectionNotFoundError,
-    VariantNotFoundError,
-    InvalidSelectionError
-)
+from dclimate_client_py import dClimateClient
+from dclimate_client_py.dclimate_zarr_errors import InvalidSelectionError
 
-try:
-    ds = load_dataset(dataset="nonexistent")
-except DatasetNotFoundError as e:
-    print(f"Dataset not found: {e}")
+async with dClimateClient() as client:
+    try:
+        # Missing collection parameter
+        data, meta = await client.load_dataset(dataset="temperature")
+    except InvalidSelectionError as e:
+        print(f"Error: {e}")
+        # "collection parameter is required. Use client.list_datasets()..."
 
-try:
-    ds = load_dataset(
-        dataset="temp2m",
-        collection="nonexistent"
-    )
-except CollectionNotFoundError as e:
-    print(f"Collection not found: {e}")
+    try:
+        # Non-existent collection
+        data, meta = await client.load_dataset(
+            collection="nonexistent",
+            dataset="temperature"
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        # "Collection 'nonexistent' not found in STAC catalog"
 
-try:
-    ds = load_dataset(
-        dataset="temp2m",
-        collection="era5",
-        variant="nonexistent"
-    )
-except VariantNotFoundError as e:
-    print(f"Variant not found: {e}")
+    try:
+        # Non-existent dataset
+        data, meta = await client.load_dataset(
+            collection="ifs",
+            dataset="nonexistent"
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        # "Dataset 'nonexistent' not found in collection 'ifs'"
 
-try:
-    # Multi-variant dataset without specifying variant (will raise error)
-    ds = load_dataset(
-        dataset="temp2m",
-        collection="era5"
-        # Missing: variant="finalized" or variant="non-finalized"
-    )
-except InvalidSelectionError as e:
-    print(f"Invalid selection: {e}")
-    # Error will mention: "Please specify one: ['finalized', 'non-finalized']"
+    try:
+        # Non-existent variant
+        data, meta = await client.load_dataset(
+            collection="ifs",
+            dataset="temperature",
+            variant="nonexistent"
+        )
+    except ValueError as e:
+        print(f"Error: {e}")
+        # "Dataset 'temperature' with variant 'nonexistent' not found..."
 ```
 
-### To New API
+## Advanced Usage
+
+### Navigating the STAC Catalog
 
 ```python
-# NEW: Catalog-based loading with explicit variant selection
-from dclimate_client_py import load_dataset
+import pystac
+from dclimate_client_py import load_stac_catalog
 
-ds = load_dataset(
-    dataset="temp2m",
-    collection="era5",
-    variant="finalized",  # Must specify variant for multi-variant datasets
-    gateway_uri_stem="http://localhost:8080"
-)
+# Load catalog
+catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+
+# Navigate through collections
+for child_link in catalog.get_child_links():
+    collection_id = child_link.extra_fields.get("dclimate:id")
+    if not collection_id:
+        continue
+
+    print(f"Collection: {collection_id}")
+
+    # Resolve the collection
+    collection = child_link.resolve_stac_object(root=catalog).target
+
+    # List all items in the collection
+    for item in collection.get_items():
+        print(f"  Item: {item.id}")
+
+        # Access item metadata
+        if "dclimate:dataset" in item.properties:
+            print(f"    Dataset: {item.properties['dclimate:dataset']}")
+
+        # Access assets
+        for asset_key, asset in item.assets.items():
+            print(f"    Asset '{asset_key}': {asset.href}")
 ```
+
+### Using Custom StacIO
+
+The client uses a custom `IPFSStacIO` class to handle `ipfs://` URIs:
+
+```python
+from dclimate_client_py.stac_catalog import IPFSStacIO
+import pystac
+
+# Create custom IPFS StacIO handler
+stac_io = IPFSStacIO("https://ipfs-gateway.dclimate.net")
+pystac.StacIO.set_default(lambda: stac_io)
+
+# Now you can load STAC objects from ipfs:// URIs
+catalog = pystac.Catalog.from_file("ipfs://bafybeiabc123...")
+```
+
+## Comparison with Legacy Approach
+
+### Old: Manual CID Management
+```python
+# Had to know and manage CIDs manually
+cid = "bafybeiabc123..."
+ds = load_dataset_from_cid(cid, gateway_url="https://...")
+```
+
+### New: STAC-Based Discovery
+```python
+# Discover and load by logical name
+async with dClimateClient() as client:
+    # Browse what's available
+    datasets = client.list_datasets()
+
+    # Load by name
+    data, metadata = await client.load_dataset(
+        collection="ifs",
+        dataset="temperature",
+        variant="single"
+    )
+    # CID is resolved automatically: metadata['cid']
+```
+
+## Benefits of STAC Integration
+
+1. **Industry Standard**: STAC is a widely-adopted standard for geospatial data
+2. **Discoverable**: Datasets can be browsed and discovered programmatically
+3. **Metadata-Rich**: STAC supports extensive metadata about datasets
+4. **Extensible**: Custom fields like `dclimate:id` and `dclimate:types` extend STAC for dClimate needs
+5. **Interoperable**: Works with standard STAC tools and libraries
+6. **Version Control**: Each STAC catalog has its own CID, enabling versioning
+7. **Human-Readable**: Dataset names are more intuitive than raw CIDs
 
 ## Future Enhancements
 
-The catalog structure supports features that can be added in the future:
+Potential future additions to the STAC catalog integration:
 
-1. **Lazy auto-concatenation**: Re-enable auto-concatenation when xarray's lazy concat is fully supported
-2. **URL-based variants**: Support for `url` field to fetch CIDs from API endpoints
-3. **STAC integration**: Keep STAC support for dynamic dataset discovery
-4. **Metadata enrichment**: Add more metadata fields (descriptions, spatial/temporal extent, etc.)
-5. **Custom catalogs**: Users can provide their own catalog definitions
+1. **Temporal/Spatial Extent**: Add STAC extent information for datasets
+2. **Search Capabilities**: Filter datasets by time range, spatial bounds, or metadata
+3. **Multiple Catalog Sources**: Support for additional STAC catalogs beyond dClimate
+4. **Caching**: Cache catalog metadata for faster repeated access
+5. **Automatic Updates**: Detect and refresh when new catalog versions are available
 
-## Comparison with dclimate-client-js
+## Resources
 
-| Feature | dclimate-client-js | dclimate-zarr-client (Python) |
-|---------|-------------------|-------------------------------|
-| Load by dataset name | ✅ `loadDataset()` | ✅ `load_dataset()` |
-| Auto-concatenation | ✅ Smart concatenation | ⏸️ Disabled (pending lazy concat support) |
-| List catalog | ✅ `listDatasetCatalog()` | ✅ `list_dataset_catalog()` |
-| Return type options | ✅ Jaxray or GeoTemporal | ✅ xarray or GeotemporalData |
-| Direct CID loading | ✅ `cid` option | ✅ `cid` parameter |
-| Collection auto-detect | ✅ Yes | ✅ Yes |
-| URL-based CID fetch | ✅ Yes | 🔜 Not yet implemented |
-| Catalog structure | TypeScript types | Python TypedDicts |
-
-## Examples
-
-See the [examples directory](examples/) for complete working examples:
-
+- [STAC Specification](https://stacspec.org/)
+- [PySTAC Documentation](https://pystac.readthedocs.io/)
+- [dClimate Documentation](https://docs.dclimate.net/)
+- [IPFS Documentation](https://docs.ipfs.tech/)

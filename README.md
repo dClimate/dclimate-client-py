@@ -9,7 +9,7 @@
 
 Retrieve dClimate GIS zarr datasets stored on IPFS
 
-Uses [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structures stored efficiently on IPFS.
+Uses [STAC (SpatioTemporal Asset Catalog)](https://stacspec.org/) for dataset discovery and [py-hamt](https://github.com/dClimate/py-hamt) to access Zarr data structures stored efficiently on IPFS.
 
 Filtering and aggregation are packaged into convenience functions optimized for flexibility and performance.
 
@@ -78,14 +78,17 @@ async def main_xarray():
         print(xr_dataset)
         print(f"Dataset CID: {metadata['cid']}")
 
-# List available datasets in the catalog (synchronous helper)
-catalog = client.list_dataset_catalog()
-for collection in catalog:
-    print(f"Collection: {collection['collection']}")
-    for dataset in collection['datasets']:
-        print(f"  Dataset: {dataset['dataset']}")
-        for variant in dataset['variants']:
-            print(f"    Variant: {variant['variant']}")
+# List available datasets from the STAC catalog
+from dclimate_client_py import list_available_datasets, load_stac_catalog
+
+# Load the STAC catalog
+stac_catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
+
+# List all available datasets
+datasets = list_available_datasets(stac_catalog)
+for collection_id, info in datasets.items():
+    print(f"Collection: {info['title']} ({collection_id})")
+    print(f"  Dataset types: {', '.join(info['types'])}")
 
 ```
 
@@ -145,6 +148,18 @@ aggregations.
 
 ---
 
+### stac_catalog.py
+
+STAC (SpatioTemporal Asset Catalog) integration for dClimate datasets. Provides functions to:
+- Fetch the latest STAC catalog CID from the dClimate IPFS gateway
+- Load and navigate STAC catalogs stored on IPFS
+- Resolve dataset names to IPFS CIDs using the STAC catalog structure
+- List all available datasets and collections
+
+Uses a custom `IPFSStacIO` implementation to transparently resolve `ipfs://` URIs via HTTP gateways, allowing pystac to work seamlessly with IPFS-hosted catalogs.
+
+---
+
 ### ipfs_retrieval.py
 
-Functions for resolving IPNS names, traversing the dClimate STAC catalog stored on IPFS, and loading Zarr datasets using `py-hamt`. Handles interaction with IPFS gateways and RPC endpoints.
+Functions for loading Zarr datasets from IPFS using `py-hamt`. Handles interaction with IPFS gateways and RPC endpoints through the KuboCAS interface.
