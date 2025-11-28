@@ -77,7 +77,7 @@ class DatasetMetadata(TypedDict, total=False):
     cid: str  # The actual CID used to load the dataset
     url: Optional[str]  # URL if one was used in the resolution
     timestamp: Optional[int]  # Unix timestamp in milliseconds when dataset was last updated
-    source: typing.Literal["catalog", "direct_cid"]  # How the dataset was loaded
+    source: typing.Literal["catalog", "stac", "direct_cid"]  # How the dataset was loaded
+    organization: Optional[str]
 
 # --- Helper Functions ---
-

@@ -32,8 +32,9 @@ async def main():
         # For datasets with multiple variants, you must specify which variant
         # Returns a tuple: (dataset, metadata)
         dataset, metadata = await dclimate.load_dataset(
-            dataset="2m_temperature",
-            collection="era5",
+            dataset="temperature_2m",
+            collection="era5",  # Can also pass "ecmwf_era5"
+            organization="ecmwf",
             variant="finalized",  # Required for multi-variant datasets
             return_xarray=False   # Returns GeotemporalData wrapper (default)
         )
@@ -42,7 +43,7 @@ async def main():
         print(f"Loaded: {metadata['slug']}")
         print(f"CID: {metadata['cid']}")
         print(f"Timestamp: {metadata.get('timestamp')}")  # If available from URL fetch
-        print(f"Source: {metadata['source']}")  # 'catalog' or 'direct_cid'
+        print(f"Source: {metadata['source']}")  # 'stac' or 'direct_cid'
 
         # Apply queries using the GeotemporalData interface
         dataset_filtered = dataset.point(latitude=40.875, longitude=-104.875)
@@ -60,8 +61,9 @@ async def main_custom_ipfs():
         rpc_base_url="http://localhost:5001"
     ) as dclimate:
         dataset, metadata = await dclimate.load_dataset(
-            dataset="2m_temperature",
+            dataset="temperature_2m",
             collection="era5",
+            organization="ecmwf",
             variant="finalized"
         )
         # Query dataset...
@@ -70,8 +72,9 @@ async def main_custom_ipfs():
 async def main_xarray():
     async with dClimateClient() as dclimate:
         xr_dataset, metadata = await dclimate.load_dataset(
-            dataset="2m_temperature",
+            dataset="temperature_2m",
             collection="era5",
+            organization="ecmwf",
             variant="finalized",
             return_xarray=True  # Returns xarray.Dataset
         )
@@ -87,7 +90,10 @@ stac_catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
 # List all available datasets
 datasets = list_available_datasets(stac_catalog)
 for collection_id, info in datasets.items():
-    print(f"Collection: {info['title']} ({collection_id})")
+    print(
+        f"Collection: {info['title']} ({collection_id})"
+        + (f" | org: {info['organization']}" if info.get('organization') else "")
+    )
     print(f"  Dataset types: {', '.join(info['types'])}")
 
 ```

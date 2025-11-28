@@ -31,14 +31,16 @@ async def main():
 
         # Print collections and their dataset types
         for collection_id, info in datasets.items():
-            print(f"{info['title']} ({collection_id})")
+            org = f" [{info['organization']}]" if info.get("organization") else ""
+            print(f"{info['title']} ({collection_id}){org}")
             print(f"  Types: {', '.join(info['types'])}")
 
         # Load a specific dataset
         data, metadata = await client.load_dataset(
-            collection="ifs",
-            dataset="temperature",
-            variant="single"  # Specify variant if multiple exist
+            collection="era5",  # or "ecmwf_era5"
+            organization="ecmwf",
+            dataset="temperature_2m",
+            variant="finalized"  # Specify variant if multiple exist
         )
 
         # Work with the data
@@ -68,24 +70,27 @@ datasets = list_available_datasets(catalog)
 
 # Example output structure:
 # {
-#     "ifs": {
-#         "id": "ifs",
-#         "title": "Integrated Forecasting System",
-#         "types": ["temperature", "precipitation", "wind_u", "wind_v"]
-#     },
-#     "era5": {
-#         "id": "era5",
+#     "ecmwf_era5": {
+#         "id": "ecmwf_era5",
+#         "organization": "ecmwf",
 #         "title": "ERA5 Reanalysis",
-#         "types": ["2m_temperature", "total_precipitation"]
+#         "types": ["temperature_2m", "precipitation_total"]
+#     },
+#     "ecmwf_ifs": {
+#         "id": "ecmwf_ifs",
+#         "organization": "ecmwf",
+#         "title": "Integrated Forecasting System (IFS)",
+#         "types": ["temperature_forecast", "wind_u_forecast", ...]
 #     }
 # }
 
 # Resolve a specific dataset to its CID
 cid = resolve_dataset_cid_from_stac(
     catalog=catalog,
-    collection="ifs",
-    dataset="temperature",
-    variant="single"  # Optional, only needed if dataset has multiple variants
+    collection="ecmwf_era5",
+    dataset="temperature_2m",
+    variant="finalized",  # Optional, only needed if dataset has multiple variants
+    organization="ecmwf",
 )
 
 print(f"Dataset CID: {cid}")
@@ -97,26 +102,24 @@ The dClimate STAC catalog follows this hierarchy:
 
 ```
 Root Catalog (ipfs://...)
-├── Collection: ifs
-│   ├── Item: ifs-temperature-single
-│   │   └── Asset: data (ipfs://... -> Zarr dataset)
-│   ├── Item: ifs-temperature-ensemble
-│   │   └── Asset: data (ipfs://... -> Zarr dataset)
-│   └── Item: ifs-precipitation-single
-│       └── Asset: data (ipfs://... -> Zarr dataset)
-├── Collection: era5
-│   ├── Item: era5-2m_temperature-finalized
-│   │   └── Asset: data (ipfs://... -> Zarr dataset)
-│   └── Item: era5-total_precipitation-finalized
-│       └── Asset: data (ipfs://... -> Zarr dataset)
-└── Collection: aifs
-    └── ...
+├── Organization: ecmwf
+│   ├── Collection: ecmwf_era5
+│   │   ├── Item: ecmwf_era5-temperature_2m-finalized
+│   │   │   └── Asset: data (ipfs://... -> Zarr dataset)
+│   │   └── Item: ecmwf_era5-precipitation_total-finalized
+│   └── Collection: ecmwf_ifs
+│       └── Item: ecmwf_ifs-temperature_forecast-single
+├── Organization: copernicus
+│   └── Collection: copernicus_clms
+│       └── Item: copernicus_clms-fpar-default
+└── ...
 ```
 
 ### Catalog Components
 
-- **Root Catalog**: Entry point containing links to all collections
-- **Collections**: Groups of related datasets (e.g., "ifs", "era5", "aifs")
+- **Root Catalog**: Entry point containing links to all organizations
+- **Organizations**: Catalogs grouping collections (e.g., "ecmwf", "copernicus")
+- **Collections**: Groups of related datasets (e.g., "ecmwf_era5", "ecmwf_ifs")
   - Each collection has a `dclimate:id` field for identification
   - Collections have a `dclimate:types` field listing available dataset types
 - **Items**: Individual dataset variants following the pattern `{collection}-{dataset}-{variant}`
@@ -131,8 +134,9 @@ Load a dataset using the managed STAC catalog.
 ```python
 async def load_dataset(
     dataset: str,                    # Dataset name (e.g., "temperature")
-    collection: str,                 # Collection ID (e.g., "ifs")
+    collection: str,                 # Collection ID (e.g., "ecmwf_ifs")
     variant: Optional[str] = None,   # Variant name (e.g., "single", "ensemble")
+    organization: Optional[str] = None,  # Organization/agency that owns the collection
     cid: Optional[str] = None,       # Direct CID override (bypasses STAC)
     return_xarray: bool = False,     # Return raw xarray.Dataset instead of GeotemporalData
 ) -> Union[
@@ -143,8 +147,12 @@ async def load_dataset(
 
 **Parameters:**
 - `dataset`: The dataset type name (see `list_datasets()` for available types)
-- `collection`: The collection ID containing the dataset
+- `collection`: The collection ID containing the dataset. Can be prefixed (e.g., `ecmwf_era5`)
+  or the unprefixed short name when `organization` is provided.
 - `variant`: Optional variant name. Required if the dataset has multiple variants
+- `organization`: Optional organization/agency id (e.g., `ecmwf`, `copernicus`). When provided,
+  the client resolves the collection within that organization's catalog. When omitted, it is
+  inferred from the root catalog metadata.
 - `cid`: Optional direct CID to bypass STAC catalog resolution
 - `return_xarray`: If True, return raw `xarray.Dataset`, otherwise return `GeotemporalData` wrapper
 
@@ -155,11 +163,12 @@ async def load_dataset(
     - `collection`: Collection ID
     - `dataset`: Dataset name
     - `variant`: Variant name
-    - `slug`: Full dataset identifier (collection/dataset/variant)
+    - `slug`: Full dataset identifier (org/collection/dataset/variant when organization is known)
     - `cid`: IPFS CID that was loaded
     - `source`: Either "stac" or "direct_cid"
     - `url`: Always None for STAC-based loading
     - `timestamp`: Always None for STAC-based loading
+    - `organization`: The resolved organization id when available
 
 **Raises:**
 - `RuntimeError`: If client is not used as async context manager
@@ -172,16 +181,18 @@ async def load_dataset(
 # Basic usage
 async with dClimateClient() as client:
     data, metadata = await client.load_dataset(
-        collection="ifs",
-        dataset="temperature",
-        variant="single"
+        collection="era5",  # or "ecmwf_era5"
+        organization="ecmwf",
+        dataset="temperature_2m",
+        variant="finalized"
     )
 
 # Get raw xarray.Dataset
 async with dClimateClient() as client:
     xr_ds, metadata = await client.load_dataset(
         collection="era5",
-        dataset="2m_temperature",
+        organization="ecmwf",
+        dataset="temperature_2m",
         variant="finalized",
         return_xarray=True
     )
@@ -190,7 +201,8 @@ async with dClimateClient() as client:
 async with dClimateClient() as client:
     data, metadata = await client.load_dataset(
         dataset="temperature",  # Used for metadata only
-        collection="ifs",
+        collection="ecmwf_ifs",
+        organization="ecmwf",
         cid="bafybeiabc123..."
     )
     # metadata['source'] will be 'direct_cid'

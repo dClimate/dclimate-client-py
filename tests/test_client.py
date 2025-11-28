@@ -124,14 +124,14 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
             # Load the dataset once
             dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
-                dataset="2m_temperature",
+                dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
             )
 
             # Use the specific variable if needed
-            if "2m_temperature" in dataset.data.data_vars:
-                dataset = dataset.use("2m_temperature")
+            if "temperature_2m" in dataset.data.data_vars:
+                dataset = dataset.use("temperature_2m")
 
             # Apply point query
             point_data = dataset.point(
@@ -170,14 +170,14 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
             # Load the dataset again for rectangle query
             dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
-                dataset="2m_temperature",
+                dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
             )
 
             # Use the specific variable if needed
-            if "2m_temperature" in dataset.data.data_vars:
-                dataset = dataset.use("2m_temperature")
+            if "temperature_2m" in dataset.data.data_vars:
+                dataset = dataset.use("temperature_2m")
 
             # Apply rectangle query
             rect_data = dataset.rectangle(
@@ -199,7 +199,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
             # Optionally load back the netcdf to verify content
             import io
             ds_from_nc = xr.open_dataset(io.BytesIO(rectangle_nc))
-            assert "2m_temperature" in ds_from_nc or len(ds_from_nc.data_vars) > 0
+            assert "temperature_2m" in ds_from_nc or len(ds_from_nc.data_vars) > 0
             assert ds_from_nc.dims["time"] == 97  # 97 hours inclusive
             assert "latitude" in ds_from_nc.dims or "lat" in ds_from_nc.dims
             assert "longitude" in ds_from_nc.dims or "lon" in ds_from_nc.dims
@@ -218,14 +218,14 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
             # Load the dataset again for spatial aggregation query
             dataset, metadata = await dclimate.load_dataset(
                 collection="era5",
-                dataset="2m_temperature",
+                dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
             )
 
             # Use the specific variable if needed
-            if "2m_temperature" in dataset.data.data_vars:
-                dataset = dataset.use("2m_temperature")
+            if "temperature_2m" in dataset.data.data_vars:
+                dataset = dataset.use("temperature_2m")
 
             # Apply rectangle query
             agg_data = dataset.rectangle(

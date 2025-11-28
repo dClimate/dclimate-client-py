@@ -227,43 +227,49 @@ class TestResolveDatasetCidFromStac:
 
     def test_resolve_dataset_cid_with_variant(self, loaded_catalog):
         """Test resolving a dataset CID with a specific variant."""
-        # Find the first collection
         child_links = list(loaded_catalog.get_child_links())
         if not child_links:
-            pytest.skip("No collections in catalog")
+            pytest.skip("No organizations/collections in catalog")
 
-        collection_link = child_links[0]
-        collection_id = collection_link.extra_fields.get("dclimate:id")
-
-        if not collection_id:
-            pytest.skip("Collection has no dclimate:id")
-
-        # Resolve the collection
-        collection_obj = collection_link.resolve_stac_object(root=loaded_catalog).target
-
-        # Find an item with a variant
         item_with_variant = None
-        for item in collection_obj.get_items():
-            parts = item.id.split("-")
-            if len(parts) >= 3:  # collection-dataset-variant
-                item_with_variant = item
+        organization_id = None
+        collection_id = None
+
+        # Walk org -> collection until we find an item with a variant segment
+        for org_link in child_links:
+            organization_id = org_link.extra_fields.get("dclimate:id")
+            org_catalog = org_link.resolve_stac_object(root=loaded_catalog).target
+            collection_links = list(org_catalog.get_child_links())
+            if not collection_links:
+                continue
+
+            for col_link in collection_links:
+                collection_id = col_link.extra_fields.get("dclimate:id")
+                collection_obj = col_link.resolve_stac_object(root=org_catalog).target
+                for item in collection_obj.get_items():
+                    parts = item.id.split("-")
+                    if len(parts) >= 3:  # collection-dataset-variant
+                        item_with_variant = item
+                        break
+                if item_with_variant:
+                    break
+            if item_with_variant:
                 break
 
-        if not item_with_variant:
+        if not item_with_variant or not collection_id:
             pytest.skip("No items with variants found")
 
-        # Parse the item ID to extract collection, dataset, and variant
         parts = item_with_variant.id.split("-")
         item_collection = parts[0]
         item_dataset = parts[1]
         item_variant = parts[2]
 
-        # Resolve with variant
         cid = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog,
             collection=item_collection,
             dataset=item_dataset,
-            variant=item_variant
+            variant=item_variant,
+            organization=organization_id,
         )
 
         assert isinstance(cid, str)
@@ -358,6 +364,7 @@ class TestListAvailableDatasets:
             assert "id" in info
             assert "title" in info
             assert "types" in info
+            assert "organization" in info
 
             # Validate field types
             assert isinstance(info["id"], str)
@@ -388,17 +395,23 @@ class TestListAvailableDatasets:
         """Test that the results include collections with dclimate:id."""
         datasets = stac_catalog.list_available_datasets(loaded_catalog)
 
-        # Get child links with dclimate:id
         child_links = list(loaded_catalog.get_child_links())
-        dclimate_ids = [
-            link.extra_fields.get("dclimate:id")
-            for link in child_links
-            if link.extra_fields.get("dclimate:id")
-        ]
+        collection_ids = []
+        for link in child_links:
+            link_id = link.extra_fields.get("dclimate:id")
+            if not link_id:
+                continue
+            target = link.resolve_stac_object(root=loaded_catalog).target
+            if isinstance(target, pystac.Collection):
+                collection_ids.append(link_id)
+            else:
+                for col_link in target.get_child_links():
+                    col_id = col_link.extra_fields.get("dclimate:id")
+                    if col_id:
+                        collection_ids.append(col_id)
 
-        # All collections with dclimate:id should be in the results
-        for dclimate_id in dclimate_ids:
-            assert dclimate_id in datasets
+        for collection_id in collection_ids:
+            assert collection_id in datasets
 
     def test_list_datasets_excludes_links_without_dclimate_id(self, loaded_catalog):
         """Test that links without dclimate:id are excluded."""
@@ -472,14 +485,14 @@ class TestIntegrationEndToEnd:
         child_links = list(catalog.get_child_links())
         assert len(child_links) > 0
 
-        # Resolve first collection
-        first_link = child_links[0]
-        collection = first_link.resolve_stac_object(root=catalog).target
+        # Resolve first organization then first collection
+        first_org = child_links[0].resolve_stac_object(root=catalog).target
+        collection_links = list(first_org.get_child_links())
+        assert len(collection_links) > 0
 
-        # Get items from collection
+        collection = collection_links[0].resolve_stac_object(root=first_org).target
+
         items = list(collection.get_items())
-
-        # If items exist, verify they have assets
         if items:
             first_item = items[0]
             assert isinstance(first_item, pystac.Item)

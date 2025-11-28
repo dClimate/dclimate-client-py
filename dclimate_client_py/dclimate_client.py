@@ -77,6 +77,9 @@ class dClimateClient:
         self._rpc_base_url = rpc_base_url
         self._stac_catalog: typing.Optional[pystac.Catalog] = None
         self._kubo_cas: typing.Optional[KuboCAS] = None
+        self._stac_catalog = load_stac_catalog(
+            gateway_url=self._gateway_base_url
+        )
 
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
@@ -100,6 +103,7 @@ class dClimateClient:
         dataset: str,
         collection: typing.Optional[str] = None,
         variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
     ) -> typing.Union[
@@ -122,6 +126,11 @@ class dClimateClient:
         variant : str, optional
             Specific variant to load (e.g., "single", "ensemble").
             If not provided and the dataset has multiple variants, may use default.
+        organization : str, optional
+            Organization/agency that owns the collection (e.g., "ecmwf", "prism").
+            If provided, the collection will be resolved within that organization
+            catalog. If omitted, the organization is inferred from the root catalog
+            metadata where possible.
         cid : str, optional
             Direct IPFS CID to load, bypassing STAC catalog resolution.
             Useful for loading specific versions or datasets not in the catalog.
@@ -135,8 +144,8 @@ class dClimateClient:
             A tuple containing:
             - Loaded dataset, either wrapped in GeotemporalData (default) or as raw
               xarray.Dataset if return_xarray=True.
-            - Metadata dict with information about the dataset including collection,
-              dataset name, variant, slug, CID used, and source type.
+            - Metadata dict with information about the dataset including organization,
+              collection, dataset name, variant, slug, CID used, and source type.
 
         Raises
         ------
@@ -171,17 +180,27 @@ class dClimateClient:
                 "dClimateClient must be used as an async context manager. "
                 "Use 'async with dClimateClient() as client:'"
             )
+
+        resolved_collection = collection
+        if organization and collection and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
+
         # Case 1: Direct CID provided - bypass catalog resolution
         if cid:
+            slug_collection = resolved_collection or collection or "unknown"
+            dataset_slug = (
+                f"{organization}/{slug_collection}/{dataset}/{variant or 'default'}"
+                if organization
+                else f"{slug_collection}/{dataset}/{variant or 'default'}"
+            )
             ds = await _load_dataset_from_ipfs_cid(
                 ipfs_cid=cid,
                 kubo_cas=self._kubo_cas,
             )
 
             # Build metadata for direct CID case
-            dataset_slug = f"{collection or 'unknown'}/{dataset}/{variant or 'unknown'}"
             metadata: DatasetMetadata = {
-                "collection": collection or "unknown",
+                "collection": resolved_collection or "unknown",
                 "dataset": dataset,
                 "variant": variant or "unknown",
                 "slug": dataset_slug,
@@ -189,6 +208,12 @@ class dClimateClient:
                 "url": None,
                 "timestamp": None,
                 "source": "direct_cid",
+                "organization": organization
+                or (
+                    resolved_collection.split("_")[0]
+                    if resolved_collection and "_" in resolved_collection
+                    else None
+                ),
             }
 
             if return_xarray:
@@ -209,11 +234,23 @@ class dClimateClient:
                 "collection parameter is required. Use client.list_datasets() to see available collections."
             )
 
+        if not organization and resolved_collection:
+            available = list_available_datasets(self._stac_catalog)
+            if resolved_collection not in available:
+                prefixed_matches = [
+                    coll_id
+                    for coll_id in available.keys()
+                    if coll_id.endswith(f"_{resolved_collection}")
+                ]
+                if len(prefixed_matches) == 1:
+                    resolved_collection = prefixed_matches[0]
+
         final_cid = resolve_dataset_cid_from_stac(
             catalog=self._stac_catalog,
-            collection=collection,
+            collection=resolved_collection,
             dataset=dataset,
             variant=variant,
+            organization=organization,
         )
 
         ds = await _load_dataset_from_ipfs_cid(
@@ -223,14 +260,24 @@ class dClimateClient:
 
         # Build metadata for STAC case
         metadata: DatasetMetadata = {
-            "collection": collection,
+            "collection": resolved_collection,
             "dataset": dataset,
             "variant": variant or "default",
-            "slug": f"{collection}/{dataset}/{variant or 'default'}",
+            "slug": (
+                f"{organization}/{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+                if organization
+                else f"{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+            ),
             "cid": final_cid,
             "url": None,
             "timestamp": None,
             "source": "stac",
+            "organization": organization
+            or (
+                resolved_collection.split("_")[0]
+                if resolved_collection and "_" in resolved_collection
+                else None
+            ),
         }
 
         if return_xarray:
@@ -253,7 +300,8 @@ class dClimateClient:
                 "collection_id": {
                     "id": "collection_id",
                     "title": "Collection Title",
-                    "types": ["dataset_type1", "dataset_type2", ...]
+                    "types": ["dataset_type1", "dataset_type2", ...],
+                    "organization": "org_id"  # None for legacy catalogs
                 },
                 ...
             }
@@ -262,7 +310,7 @@ class dClimateClient:
         --------
         >>> async with dClimateClient() as client:
         ...     datasets = client.list_datasets()
-        ...     print(datasets["ifs"]["types"])
+        ...     print(datasets["ecmwf_ifs"]["types"])
         ['temperature', 'precipitation', 'wind_u', 'wind_v', ...]
         """
         # Lazy load STAC catalog
