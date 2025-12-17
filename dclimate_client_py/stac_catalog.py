@@ -291,7 +291,6 @@ def resolve_dataset_cid_from_stac(
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         item_id = item.id
         prefix = f"{collection_obj.id}-"
-        print(item_id, prefix)
         remainder = item_id[len(prefix):] if item_id.startswith(prefix) else item_id
         parts = remainder.split("-")
         item_dataset = parts[0] if parts else remainder

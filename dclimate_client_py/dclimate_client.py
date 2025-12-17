@@ -21,6 +21,7 @@ from .stac_catalog import (
     resolve_dataset_cid_from_stac,
     list_available_datasets,
 )
+from .stac_server import resolve_cid_from_stac_server
 
 
 class dClimateClient:
@@ -72,14 +73,14 @@ class dClimateClient:
         self,
         gateway_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
         rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
+        stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
     ):
         self._gateway_base_url = gateway_base_url
         self._rpc_base_url = rpc_base_url
+        self._stac_server_url = stac_server_url
         self._stac_catalog: typing.Optional[pystac.Catalog] = None
         self._kubo_cas: typing.Optional[KuboCAS] = None
-        self._stac_catalog = load_stac_catalog(
-            gateway_url=self._gateway_base_url
-        )
+        # Note: STAC catalog is loaded lazily (only if STAC server fails)
 
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
@@ -221,37 +222,53 @@ class dClimateClient:
             else:
                 return GeotemporalData(ds, dataset_name=dataset_slug), metadata
 
-        # Case 2: Resolve via STAC catalog
-        # Lazy load STAC catalog
-        if self._stac_catalog is None:
-            self._stac_catalog = load_stac_catalog(
-                gateway_url=self._gateway_base_url
-            )
-
-        # Resolve dataset CID from STAC
+        # Case 2: Resolve via STAC server (fast) or STAC catalog (fallback)
         if not collection:
             raise InvalidSelectionError(
                 "collection parameter is required. Use client.list_datasets() to see available collections."
             )
 
-        if not organization and resolved_collection:
-            available = list_available_datasets(self._stac_catalog)
-            if resolved_collection not in available:
-                prefixed_matches = [
-                    coll_id
-                    for coll_id in available.keys()
-                    if coll_id.endswith(f"_{resolved_collection}")
-                ]
-                if len(prefixed_matches) == 1:
-                    resolved_collection = prefixed_matches[0]
+        final_cid = None
 
-        final_cid = resolve_dataset_cid_from_stac(
-            catalog=self._stac_catalog,
-            collection=resolved_collection,
-            dataset=dataset,
-            variant=variant,
-            organization=organization,
-        )
+        # Try STAC server first (faster, avoids loading IPFS catalog)
+        if self._stac_server_url:
+            try:
+                final_cid = resolve_cid_from_stac_server(
+                    collection=resolved_collection,
+                    dataset=dataset,
+                    variant=variant,
+                    server_url=self._stac_server_url,
+                )
+            except Exception as e:
+                print("Fallback")
+                pass  # Fall back to IPFS catalog
+
+        # Fallback: Resolve via STAC catalog from IPFS
+        if final_cid is None:
+            # Lazy load STAC catalog
+            if self._stac_catalog is None:
+                self._stac_catalog = load_stac_catalog(
+                    gateway_url=self._gateway_base_url
+                )
+
+            if not organization and resolved_collection:
+                available = list_available_datasets(self._stac_catalog)
+                if resolved_collection not in available:
+                    prefixed_matches = [
+                        coll_id
+                        for coll_id in available.keys()
+                        if coll_id.endswith(f"_{resolved_collection}")
+                    ]
+                    if len(prefixed_matches) == 1:
+                        resolved_collection = prefixed_matches[0]
+
+            final_cid = resolve_dataset_cid_from_stac(
+                catalog=self._stac_catalog,
+                collection=resolved_collection,
+                dataset=dataset,
+                variant=variant,
+                organization=organization,
+            )
 
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=final_cid,

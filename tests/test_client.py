@@ -123,7 +123,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         try:
             # Load the dataset once
             dataset, metadata = await dclimate.load_dataset(
-                collection="era5",
+                collection="ecmwf_era5",
                 dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
@@ -169,7 +169,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         try:
             # Load the dataset again for rectangle query
             dataset, metadata = await dclimate.load_dataset(
-                collection="era5",
+                collection="ecmwf_era5",
                 dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
@@ -217,7 +217,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         try:
             # Load the dataset again for spatial aggregation query
             dataset, metadata = await dclimate.load_dataset(
-                collection="era5",
+                collection="ecmwf_era5",
                 dataset="temperature_2m",
                 variant="finalized",
                 return_xarray=False,
