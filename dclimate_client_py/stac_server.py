@@ -49,7 +49,6 @@ def resolve_cid_from_stac_server(
     # Filter to matching dataset (item ID pattern: {collection}-{dataset}-{variant})
     prefix = f"{collection}-{dataset}"
     matches = [f for f in features if f["id"].startswith(prefix)]
-
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
