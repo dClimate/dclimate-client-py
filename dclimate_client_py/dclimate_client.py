@@ -22,6 +22,13 @@ from .stac_catalog import (
     list_available_datasets,
 )
 from .stac_server import resolve_cid_from_stac_server
+from .siren import SirenClient
+from .siren.types import (
+    SirenMetricDataPoint,
+    SirenMetricQuery,
+    SirenOptions,
+    SirenRegion,
+)
 
 
 class dClimateClient:
@@ -74,6 +81,7 @@ class dClimateClient:
         gateway_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
         rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
         stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
+        siren: typing.Optional[SirenOptions] = None,
     ):
         self._gateway_base_url = gateway_base_url
         self._rpc_base_url = rpc_base_url
@@ -81,6 +89,11 @@ class dClimateClient:
         self._stac_catalog: typing.Optional[pystac.Catalog] = None
         self._kubo_cas: typing.Optional[KuboCAS] = None
         # Note: STAC catalog is loaded lazily (only if STAC server fails)
+
+        # Siren REST API client (optional)
+        self._siren_client: typing.Optional[SirenClient] = None
+        if siren is not None:
+            self._siren_client = SirenClient(siren)
 
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
@@ -337,3 +350,35 @@ class dClimateClient:
             )
 
         return list_available_datasets(self._stac_catalog)
+
+    # ------------------------------------------------------------------
+    # Siren REST API methods
+    # ------------------------------------------------------------------
+
+    async def get_metric_data(
+        self, query: SirenMetricQuery
+    ) -> list[SirenMetricDataPoint]:
+        """
+        Fetch Siren metric data for a region over a date range.
+
+        Requires the client to be initialised with ``siren=SirenOptions(...)``.
+        """
+        if self._siren_client is None:
+            raise RuntimeError(
+                "Siren is not configured. Pass siren=SirenOptions(...) "
+                "when creating the dClimateClient."
+            )
+        return await self._siren_client.get_metric_data(query)
+
+    async def list_regions(self) -> list[SirenRegion]:
+        """
+        List available Siren regions.
+
+        Requires the client to be initialised with ``siren=SirenOptions(...)``.
+        """
+        if self._siren_client is None:
+            raise RuntimeError(
+                "Siren is not configured. Pass siren=SirenOptions(...) "
+                "when creating the dClimateClient."
+            )
+        return await self._siren_client.list_regions()

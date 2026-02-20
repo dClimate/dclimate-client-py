@@ -18,6 +18,23 @@ from .stac_catalog import (
     load_stac_catalog,
     list_available_datasets,
 )
+from .siren import (
+    SirenClient,
+    SirenApiKeyAuth,
+    SirenX402Auth,
+    SirenOptions,
+    SirenMetricQuery,
+    SirenMetricDataPoint,
+    SirenRegion,
+    SirenRegionsResponse,
+    SirenCountry,
+    EvmSigner,
+)
+from .dclimate_zarr_errors import (
+    SirenApiError,
+    X402PaymentError,
+    X402NotInstalledError,
+)
 
 __all__ = [
     "dClimateClient",
@@ -31,4 +48,18 @@ __all__ = [
     "DatasetVariantConfig",
     "load_stac_catalog",
     "list_available_datasets",
+    # Siren
+    "SirenClient",
+    "SirenApiKeyAuth",
+    "SirenX402Auth",
+    "SirenOptions",
+    "SirenMetricQuery",
+    "SirenMetricDataPoint",
+    "SirenRegion",
+    "SirenRegionsResponse",
+    "SirenCountry",
+    "EvmSigner",
+    "SirenApiError",
+    "X402PaymentError",
+    "X402NotInstalledError",
 ]
