@@ -98,6 +98,45 @@ for collection_id, info in datasets.items():
 
 ```
 
+## Siren API usage
+
+The Python client also exposes a Siren REST client for metrics and regions.
+
+```python
+from dclimate_client_py import (
+    dClimateClient,
+    SirenApiKeyAuth,
+    SirenMetricQuery,
+    SirenOptions,
+)
+
+async def main():
+    client = dClimateClient(
+        siren=SirenOptions(
+            auth=SirenApiKeyAuth()  # reads SIREN_API_KEY and SIREN_ACCOUNT_ID from env
+        )
+    )
+
+    regions = await client.list_regions()
+    print(f"Loaded {len(regions)} regions")
+
+    data = await client.get_metric_data(
+        SirenMetricQuery(
+            region_id=regions[0].id,
+            metric="average_precip",
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+        )
+    )
+    print(data[:3])
+```
+
+For x402 auth, install optional dependencies:
+
+```shell
+uv sync --extra x402
+```
+
 > More examples can be found at [dClimate Jupyter Notebooks](https://github.com/dClimate/jupyter-notebooks/tree/main/notebooks). To run your own IPFS gateway follow the instructions for [installing ipfs](https://docs.ipfs.tech/install/command-line/#install-official-binary-distributions). For additional assistance find us on [Discord](https://discord.com/invite/bYWVdNDMpe ), if you are an organization or business reach out to us at community at dclimate dot net.
 
 ## Create and activate a virtual environment:

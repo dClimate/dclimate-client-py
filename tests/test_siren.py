@@ -54,7 +54,6 @@ MOCK_METRIC_DATA_LIST = [
     {"date": "2025-01-03", "value": 11.8},
 ]
 
-
 def _make_response(json_data, status_code=200):
     """Create a mock httpx.Response."""
     response = MagicMock(spec=httpx.Response)
@@ -124,6 +123,7 @@ class TestSirenClientApiKeyAuth:
         call_args = instance.get.call_args
         url = call_args[0][0]
         assert "/custom-regions/acc-123/custom" in url
+        assert instance.get.call_count == 1
 
     @pytest.mark.asyncio
     async def test_formats_date_objects(self):
@@ -131,7 +131,7 @@ class TestSirenClientApiKeyAuth:
             SirenOptions(auth=SirenApiKeyAuth(api_key="sk-test", account_id="acc-123"))
         )
 
-        mock_response = _make_response(MOCK_METRIC_DATA_DICT)
+        mock_response = _make_response({"average_temp_mean": {"2025-06-01": 22.4}})
 
         with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
             instance = AsyncMock()
@@ -237,6 +237,30 @@ class TestSirenClientApiKeyAuth:
         assert data[0].date == "2025-01-01"
         assert data[0].value == 12.5
 
+    @pytest.mark.asyncio
+    async def test_raises_if_requested_metric_missing(self):
+        client = SirenClient(
+            SirenOptions(auth=SirenApiKeyAuth(api_key="sk-test", account_id="acc-123"))
+        )
+
+        mock_response = _make_response({"different_metric": {"2025-01-01": 1.0}})
+
+        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+            instance = AsyncMock()
+            instance.get.return_value = mock_response
+            instance.__aenter__ = AsyncMock(return_value=instance)
+            instance.__aexit__ = AsyncMock(return_value=False)
+            MockClient.return_value = instance
+
+            with pytest.raises(SirenApiError, match="missing requested metric"):
+                await client.get_metric_data(
+                    SirenMetricQuery(
+                        region_id="region-1",
+                        metric="average_precip",
+                        start_date="2025-01-01",
+                        end_date="2025-01-03",
+                    )
+                )
 
 class TestSirenClientEnvVarFallback:
     """Tests for environment variable fallback."""
@@ -273,7 +297,7 @@ class TestSirenClientEnvVarFallback:
             )
         )
 
-        mock_response = _make_response(MOCK_METRIC_DATA_DICT)
+        mock_response = _make_response({"m1": {"2025-01-01": 1.0}})
 
         with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
             instance = AsyncMock()

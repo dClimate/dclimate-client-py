@@ -6,6 +6,7 @@ internally, abstracting away KuboCAS lifecycle management.
 """
 
 import typing
+import requests
 import xarray as xr
 from py_hamt import KuboCAS
 import pystac
@@ -108,6 +109,8 @@ class dClimateClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Clean up KuboCAS when exiting async context."""
+        if self._siren_client is not None:
+            await self._siren_client.aclose()
         if self._kubo_cas:
             await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
             self._kubo_cas = None
@@ -252,9 +255,9 @@ class dClimateClient:
                     variant=variant,
                     server_url=self._stac_server_url,
                 )
-            except Exception as e:
-                print("Fallback")
-                pass  # Fall back to IPFS catalog
+            except (requests.RequestException, ValueError):
+                # Fall back when server lookup fails or returns no usable match.
+                pass
 
         # Fallback: Resolve via STAC catalog from IPFS
         if final_cid is None:
