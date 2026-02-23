@@ -99,7 +99,7 @@ async def test_direct_cid_loading():
     print("\nTesting direct CID loading:")
     print(f"  CID: {test_cid}")
 
-    async with dClimateClient() as client:
+    async with dClimateClient():
         try:
             print("✓ Client created")
             print("✓ Direct CID loading bypasses STAC catalog")

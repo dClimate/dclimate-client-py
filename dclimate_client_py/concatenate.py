@@ -183,7 +183,7 @@ async def concatenate_datasets(
             )
 
             # Concatenate with combined dataset
-            new_combined = xr.concat(
+            combined = xr.concat(
                 [combined, sliced_next],
                 dim=dimension,
             )

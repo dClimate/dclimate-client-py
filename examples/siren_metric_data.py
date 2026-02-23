@@ -13,10 +13,8 @@ import asyncio
 import json
 import pathlib
 from datetime import date
-from dotenv import load_dotenv
 
-# Load .env from project root
-load_dotenv(pathlib.Path(__file__).resolve().parent.parent / ".env")
+from dotenv import load_dotenv
 
 from dclimate_client_py import (
     dClimateClient,
@@ -24,6 +22,9 @@ from dclimate_client_py import (
     SirenMetricQuery,
     SirenOptions,
 )
+
+# Load .env from project root
+load_dotenv(pathlib.Path(__file__).resolve().parent.parent / ".env")
 
 
 async def main():
