@@ -85,7 +85,9 @@ def _create_signer() -> object:
 
     if mnemonic:
         if not hasattr(Account, "from_mnemonic"):
-            raise RuntimeError("eth_account.from_mnemonic is unavailable in this environment.")
+            raise RuntimeError(
+                "eth_account.from_mnemonic is unavailable in this environment."
+            )
         Account.enable_unaudited_hdwallet_features()
         return EthAccountSigner(Account.from_mnemonic(mnemonic))
 
@@ -149,7 +151,9 @@ async def main() -> None:
         except Exception as err:
             elapsed_ms = int((perf_counter() - started_at) * 1000)
             print(f"get_metric_data failed: {err}")
-            print(f"Request time before failure: {elapsed_ms} ms ({elapsed_ms / 1000:.2f} s)")
+            print(
+                f"Request time before failure: {elapsed_ms} ms ({elapsed_ms / 1000:.2f} s)"
+            )
     finally:
         await client.aclose()
 

@@ -192,9 +192,7 @@ async def concatenate_datasets(
             )
 
         except NoDataFoundError as e:
-            logger.warning(
-                f"Skipping dataset {i} as it contains no new data: {e}"
-            )
+            logger.warning(f"Skipping dataset {i} as it contains no new data: {e}")
             # Continue to next dataset
             continue
 

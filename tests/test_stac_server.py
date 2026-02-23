@@ -57,7 +57,7 @@ def available_dataset(stac_server_url, check_stac_server):
     # Extract dataset from item ID (format: {collection}-{dataset}-{variant})
     dataset = None
     if collection and item_id.startswith(f"{collection}-"):
-        remainder = item_id[len(f"{collection}-"):]
+        remainder = item_id[len(f"{collection}-") :]
         parts = remainder.split("-")
         if parts:
             dataset = parts[0]
@@ -157,7 +157,9 @@ class TestResolveCidFromStacServer:
         assert isinstance(cid, str)
         assert len(cid) > 0
 
-    def test_resolve_cid_invalid_collection_raises(self, stac_server_url, check_stac_server):
+    def test_resolve_cid_invalid_collection_raises(
+        self, stac_server_url, check_stac_server
+    ):
         """Test that invalid collection raises ValueError."""
         with pytest.raises(ValueError) as exc_info:
             resolve_cid_from_stac_server(
@@ -168,7 +170,9 @@ class TestResolveCidFromStacServer:
 
         assert "No items found" in str(exc_info.value)
 
-    def test_resolve_cid_invalid_dataset_raises(self, stac_server_url, available_dataset):
+    def test_resolve_cid_invalid_dataset_raises(
+        self, stac_server_url, available_dataset
+    ):
         """Test that invalid dataset raises ValueError."""
         with pytest.raises(ValueError) as exc_info:
             resolve_cid_from_stac_server(
@@ -179,7 +183,9 @@ class TestResolveCidFromStacServer:
 
         assert "No items found" in str(exc_info.value)
 
-    def test_resolve_cid_invalid_variant_raises(self, stac_server_url, available_dataset):
+    def test_resolve_cid_invalid_variant_raises(
+        self, stac_server_url, available_dataset
+    ):
         """Test that invalid variant raises ValueError."""
         with pytest.raises(ValueError) as exc_info:
             resolve_cid_from_stac_server(
@@ -193,7 +199,9 @@ class TestResolveCidFromStacServer:
 
     def test_resolve_cid_connection_error_on_bad_url(self):
         """Test that connection error is raised for unreachable server."""
-        with pytest.raises((requests.ConnectionError, requests.exceptions.RequestException)):
+        with pytest.raises(
+            (requests.ConnectionError, requests.exceptions.RequestException)
+        ):
             resolve_cid_from_stac_server(
                 collection="any",
                 dataset="any",
@@ -245,7 +253,7 @@ class TestMultipleDatasets:
             if not collection or not item_id.startswith(f"{collection}-"):
                 continue
 
-            remainder = item_id[len(f"{collection}-"):]
+            remainder = item_id[len(f"{collection}-") :]
             parts = remainder.split("-")
             if not parts:
                 continue

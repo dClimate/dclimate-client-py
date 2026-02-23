@@ -74,6 +74,7 @@ def _resolve_child_by_dclimate_id(
             return link.resolve_stac_object(root=parent).target, link
     return None, None
 
+
 def _resolve_child_by_collection_slug(
     parent: pystac.Catalog, collection_slug: str
 ) -> Tuple[Optional[pystac.Catalog], Optional[pystac.Link]]:
@@ -99,6 +100,7 @@ def _resolve_child_by_collection_slug(
 
     return None, None
 
+
 class IPFSStacIO(pystac.StacIO):
     """
     Custom StacIO implementation that resolves ipfs:// URIs via HTTP gateway.
@@ -114,7 +116,7 @@ class IPFSStacIO(pystac.StacIO):
         Args:
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
-        self.gateway_url = gateway_url.rstrip('/')
+        self.gateway_url = gateway_url.rstrip("/")
 
     def read_text(self, source: str, *args, **kwargs) -> str:
         """
@@ -153,8 +155,7 @@ class IPFSStacIO(pystac.StacIO):
 
 
 def load_stac_catalog(
-    gateway_url: str,
-    root_cid: Optional[str] = None
+    gateway_url: str, root_cid: Optional[str] = None
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -240,7 +241,9 @@ def resolve_dataset_cid_from_stac(
             )
     else:
         # First, try legacy layout where collections hang off the root catalog
-        collection_obj, _ = _resolve_child_by_collection_slug(catalog, resolved_collection_id)
+        collection_obj, _ = _resolve_child_by_collection_slug(
+            catalog, resolved_collection_id
+        )
         # # Otherwise, infer the organization by scanning org metadata on the root catalog
         # if collection_obj is None:
         #     for candidate_link in catalog.get_child_links():
@@ -291,7 +294,7 @@ def resolve_dataset_cid_from_stac(
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         item_id = item.id
         prefix = f"{collection_obj.id}-"
-        remainder = item_id[len(prefix):] if item_id.startswith(prefix) else item_id
+        remainder = item_id[len(prefix) :] if item_id.startswith(prefix) else item_id
         parts = remainder.split("-")
         item_dataset = parts[0] if parts else remainder
         item_variant = parts[1] if len(parts) > 1 else None
@@ -366,9 +369,8 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
             continue
 
         # New layout: root children are organizations with nested collections
-        is_org = (
-            link.extra_fields.get("dclimate:type") == "organization"
-            or bool(_extract_collections_from_org_link(link))
+        is_org = link.extra_fields.get("dclimate:type") == "organization" or bool(
+            _extract_collections_from_org_link(link)
         )
 
         if is_org:
@@ -414,7 +416,9 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
                 }
 
                 if collection_id in collection_categories:
-                    result[collection_id]["category"] = collection_categories[collection_id]
+                    result[collection_id]["category"] = collection_categories[
+                        collection_id
+                    ]
         else:
             # Legacy layout: root children are collections
             types = link.extra_fields.get("dclimate:types", [])

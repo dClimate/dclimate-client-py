@@ -10,6 +10,7 @@ import requests
 import xarray as xr
 from py_hamt import KuboCAS
 import pystac
+
 # Import here to avoid circular imports
 from .ipfs_retrieval import _load_dataset_from_ipfs_cid
 
@@ -125,7 +126,7 @@ class dClimateClient:
         return_xarray: bool = False,
     ) -> typing.Union[
         typing.Tuple[GeotemporalData, DatasetMetadata],
-        typing.Tuple[xr.Dataset, DatasetMetadata]
+        typing.Tuple[xr.Dataset, DatasetMetadata],
     ]:
         """
         Load a dClimate dataset from IPFS using the STAC catalog.
@@ -199,7 +200,11 @@ class dClimateClient:
             )
 
         resolved_collection = collection
-        if organization and collection and not collection.startswith(f"{organization}_"):
+        if (
+            organization
+            and collection
+            and not collection.startswith(f"{organization}_")
+        ):
             resolved_collection = f"{organization}_{collection}"
 
         # Case 1: Direct CID provided - bypass catalog resolution
@@ -348,9 +353,7 @@ class dClimateClient:
         """
         # Lazy load STAC catalog
         if self._stac_catalog is None:
-            self._stac_catalog = load_stac_catalog(
-                gateway_url=self._gateway_base_url
-            )
+            self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
 
         return list_available_datasets(self._stac_catalog)
 

@@ -12,7 +12,11 @@ from urllib.parse import quote
 
 import httpx
 
-from ..dclimate_zarr_errors import SirenApiError, X402NotInstalledError, X402PaymentError
+from ..dclimate_zarr_errors import (
+    SirenApiError,
+    X402NotInstalledError,
+    X402PaymentError,
+)
 from .types import (
     SirenAuth,
     SirenApiKeyAuth,
@@ -40,7 +44,9 @@ def _quote_path_segment(value: str) -> str:
 
 def _parse_metric_list_item(item: Any) -> SirenMetricDataPoint:
     if not isinstance(item, dict):
-        raise SirenApiError("Unexpected Siren metric list format: items must be objects.")
+        raise SirenApiError(
+            "Unexpected Siren metric list format: items must be objects."
+        )
 
     if "date" not in item or "value" not in item:
         raise SirenApiError(
@@ -126,7 +132,9 @@ def _is_x402_auth(auth: SirenAuth) -> TypeGuard[SirenX402Auth]:
 
 def _parse_region(item: Any) -> SirenRegion:
     if not isinstance(item, dict):
-        raise SirenApiError("Unexpected Siren regions response format: each item must be an object.")
+        raise SirenApiError(
+            "Unexpected Siren regions response format: each item must be an object."
+        )
 
     country_data = item.get("country", {})
     if not isinstance(country_data, dict):
@@ -135,9 +143,13 @@ def _parse_region(item: Any) -> SirenRegion:
     region_id = item.get("id")
     region_name = item.get("name")
     if not isinstance(region_id, str) or not region_id:
-        raise SirenApiError("Unexpected Siren region item format: missing non-empty 'id'.")
+        raise SirenApiError(
+            "Unexpected Siren region item format: missing non-empty 'id'."
+        )
     if not isinstance(region_name, str) or not region_name:
-        raise SirenApiError("Unexpected Siren region item format: missing non-empty 'name'.")
+        raise SirenApiError(
+            "Unexpected Siren region item format: missing non-empty 'name'."
+        )
 
     return SirenRegion(
         id=region_id,
@@ -168,10 +180,14 @@ def _parse_regions_response(
     elif isinstance(data, list):
         items_data = data
     else:
-        raise SirenApiError("Unexpected Siren regions response format: expected an object or array.")
+        raise SirenApiError(
+            "Unexpected Siren regions response format: expected an object or array."
+        )
 
     if not isinstance(items_data, list):
-        raise SirenApiError("Unexpected Siren regions response format: 'items' must be an array.")
+        raise SirenApiError(
+            "Unexpected Siren regions response format: 'items' must be an array."
+        )
 
     return [_parse_region(item) for item in items_data]
 
@@ -389,7 +405,9 @@ class SirenClient:
 
             self._x402_http_client = x402HttpxClient(client, timeout=self._timeout)
 
-            async def wrapped_fetch(url: str, method: str = "GET", **kwargs: Any) -> httpx.Response:
+            async def wrapped_fetch(
+                url: str, method: str = "GET", **kwargs: Any
+            ) -> httpx.Response:
                 return await self._x402_http_client.request(method, url, **kwargs)
 
             self._x402_fetch = wrapped_fetch
@@ -403,7 +421,7 @@ class SirenClient:
         except ImportError:
             raise X402NotInstalledError(
                 "x402 auth requires x402 with EVM support. Install one of:\n"
-                "  pip install \"x402[evm,httpx]\"  (x402>=2)\n"
+                '  pip install "x402[evm,httpx]"  (x402>=2)\n'
                 "  pip install x402                (legacy API)"
             )
 

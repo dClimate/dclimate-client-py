@@ -1,34 +1,24 @@
-import datetime
 import pathlib
 import unittest
 import unittest.mock
 import numpy as np
-import pandas as pd
 import pytest
 import xarray as xr
 import zarr
 
 import dclimate_client_py.client as client
 from dclimate_client_py.dclimate_zarr_errors import (
-    SelectionTooLargeError,
-    ConflictingGeoRequestError,
     NoDataFoundError,
-    ConflictingAggregationRequestError,
-    InvalidExportFormatError,
-    InvalidForecastRequestError,
     DatasetNotFoundError,
     IpfsConnectionError,
 )
-from xarray.core.variable import MissingDimensionsError
 
 # Import constants from conftest
 from .conftest import (
-    KNOWN_STAC_DATASET_ID,
     KNOWN_STAC_COORD_LAT,
     KNOWN_STAC_COORD_LON,
     KNOWN_STAC_DATE,
     KNOWN_STAC_DATE_END,
-    KNOWN_STAC_FORECAST_ID,
 )
 
 # --- Test Markers ---
@@ -198,6 +188,7 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
 
             # Optionally load back the netcdf to verify content
             import io
+
             ds_from_nc = xr.open_dataset(io.BytesIO(rectangle_nc))
             assert "temperature_2m" in ds_from_nc or len(ds_from_nc.data_vars) > 0
             assert ds_from_nc.dims["time"] == 97  # 97 hours inclusive
@@ -211,7 +202,9 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         ) as e:
             pytest.fail(f"IPFS rectangle query (netcdf) failed: {e}")
         except Exception as e:
-            pytest.fail(f"IPFS rectangle query (netcdf) failed with unexpected error: {e}")
+            pytest.fail(
+                f"IPFS rectangle query (netcdf) failed with unexpected error: {e}"
+            )
 
         # Basic spatial aggregation (mean over a small box)
         try:
@@ -261,7 +254,9 @@ async def test_geo_temporal_query_ipfs_functional(polygons_mask, points_mask):
         ) as e:
             pytest.fail(f"IPFS spatial aggregation query failed: {e}")
         except Exception as e:
-            pytest.fail(f"IPFS spatial aggregation query failed with unexpected error: {e}")
+            pytest.fail(
+                f"IPFS spatial aggregation query failed with unexpected error: {e}"
+            )
 
 
 # --- Error Handling Tests ---

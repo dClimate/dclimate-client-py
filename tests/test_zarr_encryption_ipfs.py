@@ -176,9 +176,9 @@ async def test_upload_then_read(
         assert np.array_equal(loaded_ds1["temp"].values, expected_ds["temp"].values), (
             "Temp values in loaded_ds1 and expected_ds are not identical!"
         )
-        assert np.array_equal(loaded_ds1["precip"].values, expected_ds["precip"].values), (
-            "Precip values in loaded_ds1 and expected_ds are not identical!"
-        )
+        assert np.array_equal(
+            loaded_ds1["precip"].values, expected_ds["precip"].values
+        ), "Precip values in loaded_ds1 and expected_ds are not identical!"
 
         # Attempt to read with the WRONG key
         # Create new encryption filter but with a different encryption key

@@ -54,6 +54,7 @@ MOCK_METRIC_DATA_LIST = [
     {"date": "2025-01-03", "value": 11.8},
 ]
 
+
 def _make_response(json_data, status_code=200):
     """Create a mock httpx.Response."""
     response = MagicMock(spec=httpx.Response)
@@ -74,7 +75,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response(MOCK_METRIC_DATA_DICT)
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -97,7 +100,10 @@ class TestSirenClientApiKeyAuth:
         call_args = instance.get.call_args
         url = call_args[0][0]
         headers = call_args[1]["headers"]
-        assert "/metric-data-multiple/acc-123/region-1/average_precip/2025-01-01/2025-01-03" in url
+        assert (
+            "/metric-data-multiple/acc-123/region-1/average_precip/2025-01-01/2025-01-03"
+            in url
+        )
         assert headers["Authorization"] == "Bearer sk-test"
 
     @pytest.mark.asyncio
@@ -108,7 +114,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response(MOCK_REGIONS_RESPONSE)
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -133,7 +141,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response({"average_temp_mean": {"2025-06-01": 22.4}})
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -161,7 +171,9 @@ class TestSirenClientApiKeyAuth:
         mock_response = _make_response({}, status_code=401)
         mock_response.reason_phrase = "Unauthorized"
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -189,7 +201,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response(MOCK_METRIC_DATA_DICT)
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -217,7 +231,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response(MOCK_METRIC_DATA_LIST)
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -245,7 +261,9 @@ class TestSirenClientApiKeyAuth:
 
         mock_response = _make_response({"different_metric": {"2025-01-01": 1.0}})
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -261,6 +279,7 @@ class TestSirenClientApiKeyAuth:
                         end_date="2025-01-03",
                     )
                 )
+
 
 class TestSirenClientEnvVarFallback:
     """Tests for environment variable fallback."""
@@ -299,7 +318,9 @@ class TestSirenClientEnvVarFallback:
 
         mock_response = _make_response({"m1": {"2025-01-01": 1.0}})
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)
@@ -340,7 +361,9 @@ class TestSirenClientX402Auth:
         mock_response.reason_phrase = "Payment Required"
         wrapped_fetch = AsyncMock(return_value=mock_response)
 
-        with patch.object(client, "_get_x402_fetch", AsyncMock(return_value=wrapped_fetch)):
+        with patch.object(
+            client, "_get_x402_fetch", AsyncMock(return_value=wrapped_fetch)
+        ):
             with pytest.raises(X402PaymentError, match="x402 request failed"):
                 await client.get_metric_data(
                     SirenMetricQuery(
@@ -365,7 +388,9 @@ class TestDClimateClientSirenIntegration:
             )
         )
 
-        with patch("dclimate_client_py.siren.siren_client.httpx.AsyncClient") as MockClient:
+        with patch(
+            "dclimate_client_py.siren.siren_client.httpx.AsyncClient"
+        ) as MockClient:
             instance = AsyncMock()
             instance.get.return_value = mock_response
             instance.__aenter__ = AsyncMock(return_value=instance)

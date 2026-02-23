@@ -61,6 +61,7 @@ class AmbiguousDataVariableError(ZarrClientError):
 class IpfsConnectionError(ZarrClientError):
     """Raised when connection to IPFS daemon or gateway fails"""
 
+
 class InvalidSelectionError(ZarrClientError):
     """Raised when dataset/collection/variant selection is invalid or ambiguous"""
 

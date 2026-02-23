@@ -25,7 +25,8 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(
-        "markers", "integration: mark test as integration test requiring external services"
+        "markers",
+        "integration: mark test as integration test requiring external services",
     )
 
 
@@ -37,6 +38,7 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "integration" in item.keywords:
             item.add_marker(skip_integration)
+
 
 HERE = pathlib.Path(__file__).parent
 ETC = HERE / "etc"
