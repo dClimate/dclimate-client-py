@@ -154,3 +154,5 @@ cython_debug/
 
 # IDEs, Editors, etc...
 .vscode/
+
+mnemonic.txt

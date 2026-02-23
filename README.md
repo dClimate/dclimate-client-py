@@ -131,11 +131,7 @@ async def main():
     print(data[:3])
 ```
 
-For x402 auth, install optional dependencies:
-
-```shell
-uv sync --extra x402
-```
+`x402` is included in the default install.
 
 > More examples can be found at [dClimate Jupyter Notebooks](https://github.com/dClimate/jupyter-notebooks/tree/main/notebooks). To run your own IPFS gateway follow the instructions for [installing ipfs](https://docs.ipfs.tech/install/command-line/#install-official-binary-distributions). For additional assistance find us on [Discord](https://discord.com/invite/bYWVdNDMpe ), if you are an organization or business reach out to us at community at dclimate dot net.
 

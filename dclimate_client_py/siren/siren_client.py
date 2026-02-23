@@ -26,6 +26,11 @@ from .types import (
 
 DEFAULT_SIREN_API_URL = "https://production-api-siren.dclimate.net/api"
 DEFAULT_HTTP_TIMEOUT_SECONDS = 30.0
+_NETWORK_ALIASES = {
+    "base": "eip155:8453",
+    "base-mainnet": "eip155:8453",
+    "base-sepolia": "eip155:84532",
+}
 
 
 def _quote_path_segment(value: str) -> str:
@@ -200,6 +205,14 @@ def _build_x402_client(x402_client_class: Any, facilitator_url: str | None) -> A
     return client
 
 
+def _network_preferences(network: str) -> list[str]:
+    """Build ordered network preferences for x402 policy selection."""
+    alias = _NETWORK_ALIASES.get(network.lower(), network)
+    if alias == network:
+        return [network]
+    return [alias, network]
+
+
 class SirenClient:
     """
     Client for the Siren REST API.
@@ -351,7 +364,7 @@ class SirenClient:
     async def _get_x402_fetch(self) -> Any:
         """
         Lazily initialize the x402-wrapped fetch function.
-        Dynamically imports x402 packages so they remain optional.
+        Imports x402 at runtime to support multiple SDK layouts.
         """
         if self._x402_fetch is not None:
             return self._x402_fetch
@@ -359,28 +372,41 @@ class SirenClient:
         if not _is_x402_auth(self._auth):
             raise RuntimeError("x402 fetch requested but auth is not x402")
 
+        # Modern x402 SDK (2.x)
+        try:
+            from x402 import prefer_network, x402Client  # type: ignore[import-not-found]
+            from x402.http.clients.httpx import x402HttpxClient  # type: ignore[import-not-found]
+            from x402.mechanisms.evm.exact import (  # type: ignore[import-not-found]
+                register_exact_evm_client,
+            )
+        except ImportError:
+            pass
+        else:
+            client = x402Client()
+            for network in _network_preferences(self._auth.network):
+                client.register_policy(prefer_network(network))
+            register_exact_evm_client(client, self._auth.signer)
+
+            self._x402_http_client = x402HttpxClient(client, timeout=self._timeout)
+
+            async def wrapped_fetch(url: str, method: str = "GET", **kwargs: Any) -> httpx.Response:
+                return await self._x402_http_client.request(method, url, **kwargs)
+
+            self._x402_fetch = wrapped_fetch
+            return self._x402_fetch
+
+        # Legacy x402 SDK
         try:
             from x402.fetch import wrap_fetch_with_payment  # type: ignore[import-not-found]
-        except ImportError:
-            raise X402NotInstalledError(
-                "x402 auth requires the x402 package. Install it: pip install x402"
-            )
-
-        try:
             from x402.core import X402Client  # type: ignore[import-not-found]
-        except ImportError:
-            raise X402NotInstalledError(
-                "x402 auth requires the x402 package. Install it: pip install x402"
-            )
-
-        try:
             from x402.evm import register_evm_schemes  # type: ignore[import-not-found]
         except ImportError:
             raise X402NotInstalledError(
-                "x402 auth requires the x402 package. Install it: pip install x402"
+                "x402 auth requires x402 with EVM support. Install one of:\n"
+                "  pip install \"x402[evm,httpx]\"  (x402>=2)\n"
+                "  pip install x402                (legacy API)"
             )
 
-        # Build x402 client with EVM scheme registered for the signer.
         client = _build_x402_client(X402Client, self._auth.facilitator_url)
         register_evm_schemes(client, self._auth.signer, self._auth.network)
 

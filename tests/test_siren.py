@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from dclimate_client_py.dclimate_client import dClimateClient
-from dclimate_client_py.dclimate_zarr_errors import SirenApiError, X402NotInstalledError
+from dclimate_client_py.dclimate_zarr_errors import SirenApiError, X402PaymentError
 from dclimate_client_py.siren import SirenClient
 from dclimate_client_py.siren.types import (
     SirenApiKeyAuth,
@@ -325,7 +325,7 @@ class TestSirenClientX402Auth:
     """Tests for x402 authentication."""
 
     @pytest.mark.asyncio
-    async def test_throws_x402_not_installed_error(self):
+    async def test_raises_x402_payment_error_on_non_ok_response(self):
         mock_signer = MagicMock()
         mock_signer.address = "0x1234567890abcdef1234567890abcdef12345678"
 
@@ -336,15 +336,20 @@ class TestSirenClientX402Auth:
             )
         )
 
-        with pytest.raises(X402NotInstalledError):
-            await client.get_metric_data(
-                SirenMetricQuery(
-                    region_id="region-1",
-                    metric="average_precip",
-                    start_date="2025-01-01",
-                    end_date="2025-01-03",
+        mock_response = _make_response({}, status_code=402)
+        mock_response.reason_phrase = "Payment Required"
+        wrapped_fetch = AsyncMock(return_value=mock_response)
+
+        with patch.object(client, "_get_x402_fetch", AsyncMock(return_value=wrapped_fetch)):
+            with pytest.raises(X402PaymentError, match="x402 request failed"):
+                await client.get_metric_data(
+                    SirenMetricQuery(
+                        region_id="region-1",
+                        metric="average_precip",
+                        start_date="2025-01-01",
+                        end_date="2025-01-03",
+                    )
                 )
-            )
 
 
 class TestDClimateClientSirenIntegration:
