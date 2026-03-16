@@ -13,6 +13,8 @@ from .datasets import (
     CatalogCollection,
     CatalogDataset,
     DatasetVariantConfig,
+    SpatialExtent,
+    TemporalExtent,
 )
 from .stac_catalog import (
     load_stac_catalog,
@@ -46,6 +48,8 @@ __all__ = [
     "CatalogCollection",
     "CatalogDataset",
     "DatasetVariantConfig",
+    "SpatialExtent",
+    "TemporalExtent",
     "load_stac_catalog",
     "list_available_datasets",
     # Siren

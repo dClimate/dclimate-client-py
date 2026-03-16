@@ -6,7 +6,7 @@ to resolve dataset requests to IPFS CIDs. Similar to dclimate-client-js datasets
 """
 
 import typing
-from typing import TypedDict, List, Optional
+from typing import TypedDict, List, Optional, Tuple
 import logging
 
 
@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 hydrogen_endpoint = "https://dclimate-ceramic.duckdns.org/api/datasets"
 
 
+class SpatialExtent(TypedDict):
+    """Bounding box for a dataset's spatial coverage."""
+
+    bbox: Tuple[float, float, float, float]  # [minLon, minLat, maxLon, maxLat]
+
+
+class TemporalExtent(TypedDict):
+    """Temporal range for a dataset's time coverage."""
+
+    start: Optional[str]
+    end: Optional[str]
+
+
 class DatasetVariantConfig(TypedDict, total=False):
     """Configuration for a single dataset variant."""
 
@@ -26,6 +39,8 @@ class DatasetVariantConfig(TypedDict, total=False):
     url: Optional[str]  # API endpoint that returns CID (for future use)
     concat_priority: Optional[int]  # Lower number = higher priority for concatenation
     concat_dimension: Optional[str]  # Dimension to concatenate along (default: "time")
+    spatial_extent: Optional[SpatialExtent]
+    temporal_extent: Optional[TemporalExtent]
 
 
 class CatalogDataset(TypedDict):
