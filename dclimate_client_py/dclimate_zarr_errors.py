@@ -61,6 +61,7 @@ class AmbiguousDataVariableError(ZarrClientError):
 class IpfsConnectionError(ZarrClientError):
     """Raised when connection to IPFS daemon or gateway fails"""
 
+
 class InvalidSelectionError(ZarrClientError):
     """Raised when dataset/collection/variant selection is invalid or ambiguous"""
 
@@ -71,3 +72,20 @@ class VariantNotFoundError(ZarrClientError):
 
 class CollectionNotFoundError(ZarrClientError):
     """Raised when specified collection is not found in catalog"""
+
+
+# ---------------------------------------------------------------------------
+# Siren API errors
+# ---------------------------------------------------------------------------
+
+
+class SirenApiError(ZarrClientError):
+    """Raised when the Siren REST API returns an error"""
+
+
+class X402PaymentError(ZarrClientError):
+    """Raised when an x402 payment request fails"""
+
+
+class X402NotInstalledError(ZarrClientError):
+    """Raised when x402 auth is configured but the x402 package is not installed"""

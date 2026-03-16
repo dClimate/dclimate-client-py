@@ -25,8 +25,10 @@ async def test_list_datasets():
         for collection_id, info in datasets.items():
             print(f"\n  Collection: {collection_id}")
             print(f"  Title: {info['title']}")
-            print(f"  Dataset Types ({len(info['types'])}): {', '.join(info['types'][:5])}")
-            if len(info['types']) > 5:
+            print(
+                f"  Dataset Types ({len(info['types'])}): {', '.join(info['types'][:5])}"
+            )
+            if len(info["types"]) > 5:
                 print(f"    ... and {len(info['types']) - 5} more")
 
     print("\n✓ Test 1 passed!")
@@ -39,12 +41,12 @@ async def test_load_dataset_from_stac():
     print("=" * 60)
 
     # Test with IFS temperature single variant
-    organization="ecmwf"
+    organization = "ecmwf"
     collection = "aifs"
     dataset = "temperature_forecast"
     variant = "single"
 
-    print(f"\nLoading dataset:")
+    print("\nLoading dataset:")
     print(f"  Collection: {collection}")
     print(f"  Dataset: {dataset}")
     print(f"  Variant: {variant}")
@@ -59,20 +61,20 @@ async def test_load_dataset_from_stac():
                 collection=collection,
                 dataset=dataset,
                 variant=variant,
-                return_xarray=False
+                return_xarray=False,
             )
             end_time = time.time()
             print(f"\nLoading took {end_time - start_time:.2f} seconds")
 
-            print(f"\n✓ Successfully loaded dataset!")
-            print(f"\nMetadata:")
+            print("\n✓ Successfully loaded dataset!")
+            print("\nMetadata:")
             print(f"  Source: {metadata['source']}")
             print(f"  CID: {metadata['cid']}")
             print(f"  Slug: {metadata['slug']}")
 
-            print(f"\nDataset info:")
+            print("\nDataset info:")
             print(f"  Type: {type(data).__name__}")
-            if hasattr(data, 'dataset'):
+            if hasattr(data, "dataset"):
                 ds = data.dataset
                 print(f"  Variables: {list(ds.data_vars)}")
                 print(f"  Coordinates: {list(ds.coords)}")
@@ -94,14 +96,14 @@ async def test_direct_cid_loading():
     # Use a known CID (this would need to be a real Zarr dataset CID)
     test_cid = "bafyr4id2atcdmh6vf57uy2ii4axsketvgf2ong3hneigyv6wwxwgkpaxve"
 
-    print(f"\nTesting direct CID loading:")
+    print("\nTesting direct CID loading:")
     print(f"  CID: {test_cid}")
 
-    async with dClimateClient() as client:
+    async with dClimateClient():
         try:
             print("✓ Client created")
             print("✓ Direct CID loading bypasses STAC catalog")
-            print(f"  (Skipping actual load test - would need valid Zarr CID)")
+            print("  (Skipping actual load test - would need valid Zarr CID)")
 
         except Exception as e:
             print(f"Note: {e}")
@@ -130,6 +132,7 @@ async def main():
     except Exception as e:
         print(f"\n✗ Test failed with error: {e}")
         import traceback
+
         traceback.print_exc()
         return 1
 

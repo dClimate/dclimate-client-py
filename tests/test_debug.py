@@ -26,15 +26,15 @@ async def test_load_noaa_gfs_temperature_max_forecast():
             print(f"Dataset: {dataset}")
             print(f"\nMetadata: {metadata}")
 
-            if hasattr(dataset, 'data_vars'):
+            if hasattr(dataset, "data_vars"):
                 print(f"\nData variables: {list(dataset.data_vars)}")
-            if hasattr(dataset, 'coords'):
+            if hasattr(dataset, "coords"):
                 print(f"Coordinates: {list(dataset.coords)}")
-            if hasattr(dataset, 'dims'):
+            if hasattr(dataset, "dims"):
                 print(f"Dimensions: {dict(dataset.dims)}")
 
         except Exception as e:
-            print(f"\n--- Error loading dataset ---")
+            print("\n--- Error loading dataset ---")
             print(f"Error type: {type(e).__name__}")
             print(f"Error message: {e}")
             raise
@@ -59,12 +59,14 @@ async def test_load_noaa_gfs_with_xarray_false():
             print(f"Dataset: {dataset}")
             print(f"\nMetadata: {metadata}")
 
-            if hasattr(dataset, 'data'):
+            if hasattr(dataset, "data"):
                 print(f"\nUnderlying data type: {type(dataset.data)}")
-                print(f"Data vars: {list(dataset.data.data_vars) if hasattr(dataset.data, 'data_vars') else 'N/A'}")
+                print(
+                    f"Data vars: {list(dataset.data.data_vars) if hasattr(dataset.data, 'data_vars') else 'N/A'}"
+                )
 
         except Exception as e:
-            print(f"\n--- Error loading dataset ---")
+            print("\n--- Error loading dataset ---")
             print(f"Error type: {type(e).__name__}")
             print(f"Error message: {e}")
             raise
@@ -78,14 +80,18 @@ async def test_list_available_datasets():
 
         try:
             # Try to access catalog if available
-            if hasattr(client, 'catalog') or hasattr(client, 'get_catalog'):
-                catalog = await client.get_catalog() if hasattr(client, 'get_catalog') else client.catalog
+            if hasattr(client, "catalog") or hasattr(client, "get_catalog"):
+                catalog = (
+                    await client.get_catalog()
+                    if hasattr(client, "get_catalog")
+                    else client.catalog
+                )
                 print(f"Catalog: {catalog}")
             else:
                 print("No catalog method available on client")
 
             # Try searching for noaa_gfs
-            if hasattr(client, 'search'):
+            if hasattr(client, "search"):
                 results = await client.search("noaa_gfs")
                 print(f"Search results for 'noaa_gfs': {results}")
 

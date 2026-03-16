@@ -24,7 +24,7 @@ class TestGetRootCatalogCid:
         assert isinstance(cid, str)
         assert len(cid) > 0
         # Basic validation: CIDs typically start with 'Qm' or 'bafy'
-        assert cid.startswith(('Qm', 'bafy', 'bafk', 'bafz'))
+        assert cid.startswith(("Qm", "bafy", "bafk", "bafz"))
 
     def test_get_root_catalog_cid_consistent(self):
         """Test that multiple calls return consistent CID format."""
@@ -56,7 +56,7 @@ class TestIPFSStacIO:
         stac_io = stac_catalog.IPFSStacIO(gateway_url_with_slash)
 
         assert stac_io.gateway_url == "https://ipfs-gateway.dclimate.net"
-        assert not stac_io.gateway_url.endswith('/')
+        assert not stac_io.gateway_url.endswith("/")
 
     def test_read_text_with_ipfs_uri(self):
         """Test reading content from ipfs:// URI via gateway."""
@@ -74,6 +74,7 @@ class TestIPFSStacIO:
         assert len(content) > 0
         # Should be valid JSON for a STAC catalog
         import json
+
         catalog_data = json.loads(content)
         assert "type" in catalog_data
         assert catalog_data["type"] in ["Catalog", "Collection"]
@@ -96,6 +97,7 @@ class TestIPFSStacIO:
 
         # The content should be JSON for a STAC catalog
         import json
+
         data = json.loads(content)
         assert "type" in data
 
@@ -213,9 +215,7 @@ class TestResolveDatasetCidFromStac:
 
         # Try to resolve the CID
         cid = stac_catalog.resolve_dataset_cid_from_stac(
-            loaded_catalog,
-            collection=collection_id,
-            dataset=dataset_type
+            loaded_catalog, collection=collection_id, dataset=dataset_type
         )
 
         assert isinstance(cid, str)
@@ -223,7 +223,7 @@ class TestResolveDatasetCidFromStac:
         # Should not have ipfs:// prefix
         assert not cid.startswith("ipfs://")
         # Should be a valid CID format
-        assert cid.startswith(('Qm', 'bafy', 'bafk', 'bafz'))
+        assert cid.startswith(("Qm", "bafy", "bafk", "bafz"))
 
     def test_resolve_dataset_cid_with_variant(self, loaded_catalog):
         """Test resolving a dataset CID with a specific variant."""
@@ -282,7 +282,7 @@ class TestResolveDatasetCidFromStac:
             stac_catalog.resolve_dataset_cid_from_stac(
                 loaded_catalog,
                 collection="nonexistent_collection_xyz",
-                dataset="some_dataset"
+                dataset="some_dataset",
             )
 
         assert "not found" in str(exc_info.value).lower()
@@ -301,7 +301,7 @@ class TestResolveDatasetCidFromStac:
             stac_catalog.resolve_dataset_cid_from_stac(
                 loaded_catalog,
                 collection=collection_id,
-                dataset="nonexistent_dataset_xyz"
+                dataset="nonexistent_dataset_xyz",
             )
 
         assert "not found" in str(exc_info.value).lower()
@@ -328,7 +328,7 @@ class TestResolveDatasetCidFromStac:
                 loaded_catalog,
                 collection=collection_id,
                 dataset=dataset_type,
-                variant="nonexistent_variant_xyz"
+                variant="nonexistent_variant_xyz",
             )
 
         assert "not found" in str(exc_info.value).lower()
@@ -453,9 +453,7 @@ class TestIntegrationEndToEnd:
 
         if collection_id and dataset_type:
             cid = stac_catalog.resolve_dataset_cid_from_stac(
-                catalog,
-                collection=collection_id,
-                dataset=dataset_type
+                catalog, collection=collection_id, dataset=dataset_type
             )
             assert isinstance(cid, str)
             assert len(cid) > 0

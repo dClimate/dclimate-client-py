@@ -5,9 +5,14 @@ This module provides integration with STAC (SpatioTemporal Asset Catalog) format
 for discovering and accessing dClimate datasets stored on IPFS.
 """
 
-from typing import Optional, Dict, List, Set, Tuple
+from typing import Optional, Dict, List, Set, Tuple, Any
+import logging
 import requests
 import pystac
+
+from .datasets import SpatialExtent, TemporalExtent
+
+logger = logging.getLogger(__name__)
 
 
 def get_root_catalog_cid() -> str:
@@ -74,6 +79,7 @@ def _resolve_child_by_dclimate_id(
             return link.resolve_stac_object(root=parent).target, link
     return None, None
 
+
 def _resolve_child_by_collection_slug(
     parent: pystac.Catalog, collection_slug: str
 ) -> Tuple[Optional[pystac.Catalog], Optional[pystac.Link]]:
@@ -99,6 +105,7 @@ def _resolve_child_by_collection_slug(
 
     return None, None
 
+
 class IPFSStacIO(pystac.StacIO):
     """
     Custom StacIO implementation that resolves ipfs:// URIs via HTTP gateway.
@@ -114,7 +121,7 @@ class IPFSStacIO(pystac.StacIO):
         Args:
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
-        self.gateway_url = gateway_url.rstrip('/')
+        self.gateway_url = gateway_url.rstrip("/")
 
     def read_text(self, source: str, *args, **kwargs) -> str:
         """
@@ -153,8 +160,7 @@ class IPFSStacIO(pystac.StacIO):
 
 
 def load_stac_catalog(
-    gateway_url: str,
-    root_cid: Optional[str] = None
+    gateway_url: str, root_cid: Optional[str] = None
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -240,7 +246,9 @@ def resolve_dataset_cid_from_stac(
             )
     else:
         # First, try legacy layout where collections hang off the root catalog
-        collection_obj, _ = _resolve_child_by_collection_slug(catalog, resolved_collection_id)
+        collection_obj, _ = _resolve_child_by_collection_slug(
+            catalog, resolved_collection_id
+        )
         # # Otherwise, infer the organization by scanning org metadata on the root catalog
         # if collection_obj is None:
         #     for candidate_link in catalog.get_child_links():
@@ -291,7 +299,7 @@ def resolve_dataset_cid_from_stac(
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         item_id = item.id
         prefix = f"{collection_obj.id}-"
-        remainder = item_id[len(prefix):] if item_id.startswith(prefix) else item_id
+        remainder = item_id[len(prefix) :] if item_id.startswith(prefix) else item_id
         parts = remainder.split("-")
         item_dataset = parts[0] if parts else remainder
         item_variant = parts[1] if len(parts) > 1 else None
@@ -338,7 +346,29 @@ def resolve_dataset_cid_from_stac(
     raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")
 
 
-def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]]:
+def _extract_item_extents(
+    item: pystac.Item,
+) -> Tuple[Optional[SpatialExtent], Optional[TemporalExtent]]:
+    """Extract spatial and temporal extents from a STAC item."""
+    spatial: Optional[SpatialExtent] = None
+    temporal: Optional[TemporalExtent] = None
+
+    bbox = item.bbox
+    if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+        spatial = SpatialExtent(
+            bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+        )
+
+    props = item.properties or {}
+    start_dt = props.get("start_datetime") or props.get("datetime")
+    end_dt = props.get("end_datetime") or props.get("datetime")
+    if start_dt is not None or end_dt is not None:
+        temporal = TemporalExtent(start=start_dt, end=end_dt)
+
+    return spatial, temporal
+
+
+def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]]:
     """
     List all available datasets from the STAC catalog.
 
@@ -346,6 +376,9 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
     the dataset types available in each collection. Supports both the legacy
     layout (collections as root children) and the new layout where the root
     contains organizations that own collections.
+
+    Each dataset variant includes spatial and temporal extents extracted from
+    the STAC items (bbox and start_datetime/end_datetime properties).
 
     Args:
         catalog: The loaded STAC catalog
@@ -357,8 +390,9 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
             - types: Dataset names within the collection
             - organization: Owning organization id (None for legacy layout)
             - category: Optional category tag (e.g., historical, forecast)
+            - variants: List of dicts with variant, dataset, cid, spatial_extent, temporal_extent
     """
-    result: Dict[str, Dict[str, any]] = {}
+    result: Dict[str, Dict[str, Any]] = {}
 
     for link in catalog.get_child_links():
         child_id = link.extra_fields.get("dclimate:id")
@@ -366,9 +400,8 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
             continue
 
         # New layout: root children are organizations with nested collections
-        is_org = (
-            link.extra_fields.get("dclimate:type") == "organization"
-            or bool(_extract_collections_from_org_link(link))
+        is_org = link.extra_fields.get("dclimate:type") == "organization" or bool(
+            _extract_collections_from_org_link(link)
         )
 
         if is_org:
@@ -405,16 +438,63 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
                 if not types:
                     types = col_link.extra_fields.get("dclimate:types", [])
 
-                result[collection_id] = {
+                entry: Dict[str, Any] = {
                     "id": collection_id,
                     "title": col_link.title or collection_id,
                     "types": types,
                     "organization": org_id,
                     "organization_title": org_title,
+                    "variants": [],
                 }
 
                 if collection_id in collection_categories:
-                    result[collection_id]["category"] = collection_categories[collection_id]
+                    entry["category"] = collection_categories[collection_id]
+
+                # Resolve items to extract per-variant extents
+                try:
+                    col_catalog = col_link.resolve_stac_object(root=org_catalog).target
+                    if col_catalog is not None:
+                        prefix = f"{collection_id}-"
+                        for item in col_catalog.get_items():
+                            item_id = item.id
+                            remainder = (
+                                item_id[len(prefix) :]
+                                if item_id.startswith(prefix)
+                                else item_id
+                            )
+                            parts = remainder.split("-")
+                            item_dataset = parts[0] if parts else remainder
+                            item_variant = parts[1] if len(parts) > 1 else ""
+
+                            cid: Optional[str] = None
+                            if "data" in item.assets:
+                                href = item.assets["data"].href
+                                cid = (
+                                    href.replace("ipfs://", "")
+                                    if href.startswith("ipfs://")
+                                    else href
+                                )
+
+                            spatial, temporal = _extract_item_extents(item)
+                            variant_entry: Dict[str, Any] = {
+                                "dataset": item_dataset,
+                                "variant": item_variant,
+                            }
+                            if cid:
+                                variant_entry["cid"] = cid
+                            if spatial:
+                                variant_entry["spatial_extent"] = spatial
+                            if temporal:
+                                variant_entry["temporal_extent"] = temporal
+                            entry["variants"].append(variant_entry)
+                except Exception:
+                    logger.debug(
+                        "Could not resolve items for collection %s",
+                        collection_id,
+                        exc_info=True,
+                    )
+
+                result[collection_id] = entry
         else:
             # Legacy layout: root children are collections
             types = link.extra_fields.get("dclimate:types", [])
@@ -423,6 +503,7 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, any]
                 "title": link.title or child_id,
                 "types": types,
                 "organization": None,
+                "variants": [],
             }
 
     return result

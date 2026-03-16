@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 # --- Zarr Dataset Loading ---
 
+
 async def _load_dataset_from_ipfs_cid(
     ipfs_cid: str,
     kubo_cas: KuboCAS,
@@ -63,7 +64,9 @@ async def _load_dataset_from_ipfs_cid(
                 root_cid=ipfs_cid, cas=kubo_cas, read_only=True
             )
             ds = xr.open_zarr(store=sharded_store)
-            logger.info(f"Successfully loaded ShardedZarrStore dataset from CID: {ipfs_cid}")
+            logger.info(
+                f"Successfully loaded ShardedZarrStore dataset from CID: {ipfs_cid}"
+            )
             return ds
         except Exception as sharded_err:
             # Fall back to HAMT store if sharded loading fails

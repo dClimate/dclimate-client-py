@@ -59,13 +59,19 @@ def resolve_cid_from_stac_server(
             None,
         )
         if not item:
-            raise ValueError(f"Variant '{variant}' not found for {collection}/{dataset}")
+            raise ValueError(
+                f"Variant '{variant}' not found for {collection}/{dataset}"
+            )
     else:
         # Prefer: default > final > finalized > latest > first match
         item = matches[0]
         for preferred in ["default", "final", "finalized", "latest"]:
             found = next(
-                (f for f in matches if f["properties"].get("dclimate:variant") == preferred),
+                (
+                    f
+                    for f in matches
+                    if f["properties"].get("dclimate:variant") == preferred
+                ),
                 None,
             )
             if found:
