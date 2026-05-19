@@ -5,8 +5,10 @@ This module provides direct access to a STAC server API for resolving dataset CI
 which is faster than traversing the IPFS-hosted catalog structure.
 """
 
-from typing import Optional
+from typing import Any, Dict, Optional, Set
 import requests
+
+from .datasets import SpatialExtent, TemporalExtent
 
 STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
@@ -86,3 +88,162 @@ def resolve_cid_from_stac_server(
         return href
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
+
+
+def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:
+    if not cid:
+        return None
+    return cid.replace("ipfs://", "", 1) if cid.startswith("ipfs://") else cid
+
+
+def list_available_datasets_from_stac_server(
+    server_url: str = STAC_SERVER_URL,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    List all datasets/variants by querying a STAC API server directly.
+
+    Fast path that mirrors ``list_available_datasets`` (the IPFS walker) without
+    traversing the IPFS-hosted catalog tree. Two requests:
+
+    1. ``GET  /collections`` — collection ids, titles
+    2. ``POST /search``      — items, with dataset/variant/CID in properties
+
+    Returns the same dict-of-dicts shape as the IPFS walker so callers don't
+    need to know which path produced it.
+
+    Notes
+    -----
+    - Organization is derived from the ``{org}_{name}`` collection-id convention
+      (e.g. ``noaa_aigfs`` → ``noaa``). The IPFS walker reads it from a
+      ``dclimate:id`` field on an org-level link; the STAC API doesn't expose
+      organizations as first-class entities, so we approximate.
+    - Category (``historical`` / ``forecast``) is rolled up from item
+      ``dclimate:observation`` properties — only when every item in the
+      collection agrees, to avoid picking a misleading value when items
+      disagree.
+    - The fixed ``limit: 1000`` covers today's catalog (~45 items) by a wide
+      margin. If the catalog grows past that, switch to following the STAC
+      ``next`` link instead of a single request.
+    """
+    collections_resp = requests.get(f"{server_url}/collections", timeout=10)
+    collections_resp.raise_for_status()
+    search_resp = requests.post(
+        f"{server_url}/search",
+        json={"limit": 1000},
+        timeout=15,
+    )
+    search_resp.raise_for_status()
+
+    collections_body = collections_resp.json()
+    search_body = search_resp.json()
+
+    # Accumulator per collection. Built up from /collections then enriched by
+    # the /search response. Collections that have no items end up filtered out
+    # at the end — matches the IPFS walker, which only surfaces collections
+    # that have actual datasets.
+    accumulators: Dict[str, Dict[str, Any]] = {}
+
+    for coll in collections_body.get("collections", []) or []:
+        coll_id = coll.get("id")
+        if not isinstance(coll_id, str):
+            continue
+        organization = coll_id.split("_", 1)[0] if "_" in coll_id else None
+        accumulators[coll_id] = {
+            "id": coll_id,
+            "title": coll.get("title") or coll_id,
+            "organization": organization,
+            "observations": set(),
+            "datasets": {},  # dataset_name -> { variant_name -> variant_entry }
+        }
+
+    for feature in search_body.get("features", []) or []:
+        feature_id = feature.get("id", "")
+        collection_id = feature.get("collection")
+        if not collection_id and isinstance(feature_id, str) and "-" in feature_id:
+            collection_id = feature_id.split("-", 1)[0]
+        if not collection_id:
+            continue
+
+        entry = accumulators.get(collection_id)
+        if entry is None:
+            organization = (
+                collection_id.split("_", 1)[0] if "_" in collection_id else None
+            )
+            entry = {
+                "id": collection_id,
+                "title": collection_id,
+                "organization": organization,
+                "observations": set(),
+                "datasets": {},
+            }
+            accumulators[collection_id] = entry
+
+        props = feature.get("properties") or {}
+        observation = props.get("dclimate:observation")
+        if isinstance(observation, str) and observation:
+            entry["observations"].add(observation)
+
+        # Prefer explicit dclimate:* properties; fall back to id-parsing for
+        # items that pre-date the property convention.
+        id_parts = feature_id.split("-") if isinstance(feature_id, str) else []
+        dataset_name = props.get("dclimate:dataset_id") or (
+            id_parts[1] if len(id_parts) >= 2 else None
+        )
+        variant_name = props.get("dclimate:variant") or (
+            "-".join(id_parts[2:]) if len(id_parts) >= 3 else "default"
+        )
+        if not dataset_name:
+            continue
+
+        cid = _strip_ipfs_scheme(props.get("dclimate:latest_dataset_cid"))
+
+        variant_entry: Dict[str, Any] = {
+            "dataset": dataset_name,
+            "variant": variant_name,
+        }
+        if cid:
+            variant_entry["cid"] = cid
+
+        bbox = feature.get("bbox")
+        if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
+            variant_entry["spatial_extent"] = SpatialExtent(
+                bbox=(float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3]))
+            )
+
+        start_dt = props.get("start_datetime") or props.get("datetime")
+        end_dt = props.get("end_datetime") or props.get("datetime")
+        if start_dt is not None or end_dt is not None:
+            variant_entry["temporal_extent"] = TemporalExtent(
+                start=start_dt, end=end_dt
+            )
+
+        dataset_variants = entry["datasets"].setdefault(dataset_name, {})
+        dataset_variants[variant_name] = variant_entry
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for collection_id, entry in accumulators.items():
+        if not entry["datasets"]:
+            continue
+
+        variants_flat = []
+        for _, variants in entry["datasets"].items():
+            variants_flat.extend(variants.values())
+
+        out: Dict[str, Any] = {
+            "id": entry["id"],
+            "title": entry["title"],
+            "types": sorted(entry["datasets"].keys()),
+            "organization": entry["organization"],
+            "variants": variants_flat,
+        }
+
+        # Only roll up to a collection-level category when every item in the
+        # collection agrees. Mixed observations are a meaningful ambiguity —
+        # leave the key absent rather than picking a misleading value.
+        observations: Set[str] = entry["observations"]
+        if len(observations) == 1:
+            out["category"] = next(iter(observations))
+
+        result[collection_id] = out
+
+    return result

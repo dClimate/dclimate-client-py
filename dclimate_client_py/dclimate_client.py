@@ -23,7 +23,10 @@ from .stac_catalog import (
     resolve_dataset_cid_from_stac,
     list_available_datasets,
 )
-from .stac_server import resolve_cid_from_stac_server
+from .stac_server import (
+    resolve_cid_from_stac_server,
+    list_available_datasets_from_stac_server,
+)
 from .siren import SirenClient
 from .siren.types import (
     SirenMetricDataPoint,
@@ -351,7 +354,17 @@ class dClimateClient:
         ...     print(datasets["ecmwf_ifs"]["types"])
         ['temperature', 'precipitation', 'wind_u', 'wind_v', ...]
         """
-        # Lazy load STAC catalog
+        # STAC API first — two HTTP calls vs. hundreds of serial IPFS gateway
+        # round-trips. Fall through to the IPFS walk only if the server is
+        # unavailable or returns garbage. Mirrors the resolve-CID pattern in
+        # load_dataset().
+        if self._stac_server_url:
+            try:
+                return list_available_datasets_from_stac_server(self._stac_server_url)
+            except (requests.RequestException, ValueError):
+                pass
+
+        # Fallback: walk the IPFS-hosted catalog.
         if self._stac_catalog is None:
             self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
 

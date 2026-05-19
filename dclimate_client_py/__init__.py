@@ -20,6 +20,11 @@ from .stac_catalog import (
     load_stac_catalog,
     list_available_datasets,
 )
+from .stac_server import (
+    resolve_cid_from_stac_server,
+    list_available_datasets_from_stac_server,
+    STAC_SERVER_URL,
+)
 from .siren import (
     SirenClient,
     SirenApiKeyAuth,
@@ -52,6 +57,9 @@ __all__ = [
     "TemporalExtent",
     "load_stac_catalog",
     "list_available_datasets",
+    "resolve_cid_from_stac_server",
+    "list_available_datasets_from_stac_server",
+    "STAC_SERVER_URL",
     # Siren
     "SirenClient",
     "SirenApiKeyAuth",
