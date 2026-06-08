@@ -62,6 +62,7 @@ _STORE_OPEN_DURATION = _METER.create_histogram(
 def _attributes(
     attributes: dict[str, Any] | None = None,
 ) -> dict[str, OTEL_ATTRIBUTE_VALUE]:
+    """Return OTEL-safe attributes with unsupported values stringified."""
     if not attributes:
         return {}
     cleaned: dict[str, OTEL_ATTRIBUTE_VALUE] = {}
@@ -78,6 +79,7 @@ def _attributes(
 def _gateway_metric_attributes(
     kubo_cas: KuboCAS,
 ) -> dict[str, OTEL_ATTRIBUTE_VALUE]:
+    """Return gateway attributes derived from the KuboCAS instance."""
     return _attributes(
         {"dclimate_client.ipfs.gateway": getattr(kubo_cas, "gateway_base_url", None)}
     )
@@ -90,6 +92,7 @@ def _record_dataset_open(
     status: str,
     seconds: float,
 ) -> None:
+    """Record dataset-open request count and latency metrics."""
     attributes = {
         **_gateway_metric_attributes(kubo_cas),
         "dclimate_client.ipfs.store_type": store_type,
@@ -106,6 +109,7 @@ def _record_store_open(
     status: str,
     seconds: float,
 ) -> None:
+    """Record store-open attempt count and latency metrics."""
     attributes = {
         **_gateway_metric_attributes(kubo_cas),
         "dclimate_client.ipfs.store_type": store_type,
@@ -116,6 +120,7 @@ def _record_store_open(
 
 
 def _record_span_error(active_span: Span, exc: Exception) -> None:
+    """Attach exception details and ERROR status to an active span."""
     if not active_span.is_recording():
         return
     active_span.record_exception(exc)
@@ -123,6 +128,7 @@ def _record_span_error(active_span: Span, exc: Exception) -> None:
 
 
 def _is_connection_error(exc: Exception) -> bool:
+    """Classify gateway and network failures from exception text."""
     text = str(exc).lower()
     return any(
         token in text
