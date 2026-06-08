@@ -122,6 +122,24 @@ def _record_span_error(active_span: Span, exc: Exception) -> None:
     active_span.set_status(Status(StatusCode.ERROR, str(exc)))
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        token in text
+        for token in (
+            "connection refused",
+            "connection reset",
+            "max retries exceeded",
+            "name or service not known",
+            "network is unreachable",
+            "nodename nor servname",
+            "temporary failure in name resolution",
+            "timeout",
+            "timed out",
+        )
+    )
+
+
 # --- Zarr Dataset Loading ---
 
 
@@ -159,6 +177,8 @@ async def _load_dataset_from_ipfs_cid(
                 **_gateway_metric_attributes(kubo_cas),
             }
         ),
+        record_exception=False,
+        set_status_on_exception=False,
     ) as dataset_span:
         try:
             if not ipfs_cid:
@@ -188,6 +208,8 @@ async def _load_dataset_from_ipfs_cid(
                             **_gateway_metric_attributes(kubo_cas),
                         }
                     ),
+                    record_exception=False,
+                    set_status_on_exception=False,
                 ) as sharded_span:
                     try:
                         sharded_store = await ShardedZarrStore.open(
@@ -223,6 +245,13 @@ async def _load_dataset_from_ipfs_cid(
                 dataset_store_type = "ShardedZarrStore"
                 return ds
             except Exception as sharded_err:
+                if _is_connection_error(sharded_err):
+                    dataset_status = "connection_error"
+                    connection_error = IpfsConnectionError(
+                        f"IPFS connection failed while loading dataset from CID {ipfs_cid}. Details: {sharded_err}"
+                    )
+                    raise connection_error from sharded_err
+
                 # Fall back to HAMT store if sharded loading fails
                 if dataset_span.is_recording():
                     dataset_span.set_attribute(
@@ -241,6 +270,8 @@ async def _load_dataset_from_ipfs_cid(
                             **_gateway_metric_attributes(kubo_cas),
                         }
                     ),
+                    record_exception=False,
+                    set_status_on_exception=False,
                 ) as hamt_span:
                     try:
                         hamt_store = await HAMT.build(
@@ -291,11 +322,7 @@ async def _load_dataset_from_ipfs_cid(
         except Exception as e:
             # Catch other potential errors (e.g., Zarr format errors, py-hamt errors)
             # Check for connection errors
-            if (
-                "Connection refused" in str(e)
-                or "Max retries exceeded" in str(e)
-                or "Timeout" in str(e)
-            ):
+            if _is_connection_error(e):
                 dataset_status = "connection_error"
                 connection_error = IpfsConnectionError(
                     f"IPFS connection failed while loading dataset from CID {ipfs_cid}. Details: {e}"

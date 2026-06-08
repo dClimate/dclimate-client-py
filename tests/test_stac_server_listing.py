@@ -10,7 +10,6 @@ gateway. Integration coverage (parity with the IPFS walker) lives in
 from __future__ import annotations
 
 from typing import Any, Dict
-from unittest.mock import patch
 
 import pytest
 import requests
@@ -23,6 +22,7 @@ from dclimate_client_py.stac_server import (
 def _mock_response(payload: Dict[str, Any], status: int = 200):
     """Build a stand-in for a ``requests.Response`` that has ``json()`` and
     ``raise_for_status()``."""
+
     class _Resp:
         def __init__(self) -> None:
             self.status_code = status
