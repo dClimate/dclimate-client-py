@@ -5,9 +5,11 @@ This module provides functions for loading Zarr datasets from IPFS using KuboCAS
 """
 
 import logging
+import time
 import xarray as xr
 from multiformats import CID
 from py_hamt import KuboCAS, ZarrHAMTStore, ShardedZarrStore, HAMT
+import py_hamt.instrumentation as ipfs_instrumentation
 
 from .dclimate_zarr_errors import (
     IpfsConnectionError,
@@ -60,10 +62,16 @@ async def _load_dataset_from_ipfs_cid(
         # Try loading as ShardedZarrStore first (99% of cases)
         try:
             logger.info(f"Attempting to load as ShardedZarrStore from CID: {ipfs_cid}")
+            sharded_start = time.perf_counter()
             sharded_store = await ShardedZarrStore.open(
                 root_cid=ipfs_cid, cas=kubo_cas, read_only=True
             )
             ds = xr.open_zarr(store=sharded_store)
+            ds.attrs["_ipfs_store_type"] = "ShardedZarrStore"
+            ipfs_instrumentation.observe(
+                "dclimate_client.open_sharded_store_seconds",
+                time.perf_counter() - sharded_start,
+            )
             logger.info(
                 f"Successfully loaded ShardedZarrStore dataset from CID: {ipfs_cid}"
             )
@@ -74,6 +82,7 @@ async def _load_dataset_from_ipfs_cid(
                 f"ShardedZarrStore failed, falling back to HAMT store. Error: {sharded_err}"
             )
             logger.info(f"Loading HAMT store from CID: {ipfs_cid}")
+            hamt_start = time.perf_counter()
             hamt_store = await HAMT.build(
                 cas=kubo_cas,
                 root_node_id=cid_obj,
@@ -85,6 +94,11 @@ async def _load_dataset_from_ipfs_cid(
             zarr_hamt_store = ZarrHAMTStore(hamt_store, read_only=True)
 
             ds = xr.open_zarr(store=zarr_hamt_store)
+            ds.attrs["_ipfs_store_type"] = "ZarrHAMTStore"
+            ipfs_instrumentation.observe(
+                "dclimate_client.open_hamt_store_seconds",
+                time.perf_counter() - hamt_start,
+            )
             logger.info(f"Successfully loaded HAMT dataset from CID: {ipfs_cid}")
             return ds
     except IpfsConnectionError:
