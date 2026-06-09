@@ -6,6 +6,8 @@ internally, abstracting away KuboCAS lifecycle management.
 """
 
 import typing
+from collections.abc import Mapping
+
 import requests
 import xarray as xr
 from py_hamt import KuboCAS
@@ -325,6 +327,52 @@ class dClimateClient:
             return ds, metadata
         else:
             return GeotemporalData(ds, dataset_name=metadata["slug"]), metadata
+
+    async def select_dataset(
+        self,
+        *,
+        request: typing.Mapping[str, typing.Any],
+        selection: typing.Mapping[str, typing.Any],
+        return_xarray: bool = False,
+    ) -> typing.Union[
+        typing.Tuple[GeotemporalData, DatasetMetadata],
+        typing.Tuple[xr.Dataset, DatasetMetadata],
+    ]:
+        """
+        Load a dClimate dataset and apply point, bounds, and/or time selections.
+
+        Parameters
+        ----------
+        request : Mapping[str, Any]
+            Keyword arguments accepted by :meth:`load_dataset`, such as
+            ``dataset``, ``collection``, ``variant``, ``organization``, or ``cid``.
+        selection : Mapping[str, Any]
+            Selection mapping accepted by :meth:`GeotemporalData.select`.
+        return_xarray : bool, optional
+            If True, return the raw xarray dataset without applying selections.
+
+        Returns
+        -------
+        Tuple[Union[GeotemporalData, xr.Dataset], DatasetMetadata]
+            The selected dataset plus metadata.
+        """
+        if not isinstance(request, Mapping):
+            raise InvalidSelectionError("request must be a mapping.")
+        if not isinstance(selection, Mapping):
+            raise InvalidSelectionError("selection must be a mapping.")
+
+        load_kwargs = dict(request)
+        if load_kwargs.get("cid") and "dataset" not in load_kwargs:
+            load_kwargs["dataset"] = ""
+
+        dataset_obj, metadata = await self.load_dataset(
+            **load_kwargs,
+            return_xarray=return_xarray,
+        )
+        if not isinstance(dataset_obj, GeotemporalData):
+            return dataset_obj, metadata
+
+        return dataset_obj.select(selection), metadata
 
     def list_datasets(self) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
         """

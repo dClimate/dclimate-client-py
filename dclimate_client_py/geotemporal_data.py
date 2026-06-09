@@ -1,7 +1,10 @@
 import datetime
 import functools
+import math
+import numbers
 import operator
 import typing
+from collections.abc import Mapping
 
 import geopandas as gpd
 import pandas as pd
@@ -17,6 +20,8 @@ from . import dclimate_zarr_errors as errors
 
 # Users should not select more than this number of data points and coordinates
 DEFAULT_POINT_LIMIT = 40 * 40 * 50_000
+BoundsSelection = typing.Union[typing.Sequence[float], Mapping[str, typing.Any]]
+GeoSelectionOptions = Mapping[str, typing.Any]
 
 
 class GeotemporalData:
@@ -165,7 +170,12 @@ class GeotemporalData:
         return self._new(self.data.reindex(time=trange))
 
     def point(
-        self, latitude: float, longitude: float, snap_to_grid: bool = True
+        self,
+        latitude: float,
+        longitude: float,
+        snap_to_grid: bool = True,
+        latitude_key: str = "latitude",
+        longitude_key: str = "longitude",
     ) -> "GeotemporalData":
         """Gets a dataset corresponding to the full time series for a single point
 
@@ -178,24 +188,22 @@ class GeotemporalData:
         snap_to_grid: bool, optional
             When ``True``, find nearest point to lat, lon in dataset. When ``False``,
             error out when exact lat, lon is not on dataset grid.
+        latitude_key: str, optional
+            Name of the latitude coordinate in the dataset.
+        longitude_key: str, optional
+            Name of the longitude coordinate in the dataset.
 
         Returns
         -------
         GeotemporalData
             New dataset restricted to single point
         """
+        selection = {latitude_key: latitude, longitude_key: longitude}
         if snap_to_grid:
-            data = self.data.sel(
-                latitude=latitude, longitude=longitude, method="nearest"
-            )
+            data = self.data.sel(selection, method="nearest")
         else:
             try:
-                data = self.data.sel(
-                    latitude=latitude,
-                    longitude=longitude,
-                    method="nearest",
-                    tolerance=10e-5,
-                )
+                data = self.data.sel(selection, method="nearest", tolerance=10e-5)
             except KeyError:
                 raise errors.NoDataFoundError(
                     "User requested not to snap_to_grid, but exact coord not in dataset"
@@ -264,6 +272,8 @@ class GeotemporalData:
         min_lon: float,
         max_lat: float,
         max_lon: float,
+        latitude_key: str = "latitude",
+        longitude_key: str = "longitude",
     ) -> "GeotemporalData":
         """Reduce dataset to points in rectangle
 
@@ -278,17 +288,29 @@ class GeotemporalData:
             Northern limit of rectangle
         max_lon: float
             Eastern limit of rectangle
+        latitude_key: str, optional
+            Name of the latitude coordinate in the dataset.
+        longitude_key: str, optional
+            Name of the longitude coordinate in the dataset.
 
         Returns
         -------
         GeotemporalData
             New dataset
         """
+        try:
+            latitudes = self.data[latitude_key]
+            longitudes = self.data[longitude_key]
+        except KeyError as exc:
+            raise errors.InvalidSelectionError(
+                "Latitude/longitude coordinates were not found in the dataset."
+            ) from exc
+
         data = self.data.where(
-            (self.data.latitude >= min_lat)
-            & (self.data.latitude <= max_lat)
-            & (self.data.longitude >= min_lon)
-            & (self.data.longitude <= max_lon),
+            (latitudes >= min_lat)
+            & (latitudes <= max_lat)
+            & (longitudes >= min_lon)
+            & (longitudes <= max_lon),
             drop=True,
         )
         return self._new(data)
@@ -364,6 +386,50 @@ class GeotemporalData:
         """
         data = self.data.sel(time=slice(start_time, end_time))
         return self._new(data)
+
+    def select(self, selection: GeoSelectionOptions) -> "GeotemporalData":
+        """Apply a combined point or bounds selection and optional time range.
+
+        The selection mapping accepts:
+
+        - ``point``: ``{"latitude": float, "longitude": float, "options": {...}}``
+        - ``bounds``: ``[west, south, east, north]`` or a mapping with those keys
+        - ``time_range``/``timeRange``: ``[start, end]`` or
+          ``{"start": start, "end": end}``
+        """
+        _ensure_mapping(selection, "Selection")
+        current = self
+
+        point = _get_selection_value(selection, "point")
+        bounds = _get_selection_value(selection, "bounds")
+        if point is not None and bounds is not None:
+            raise errors.InvalidSelectionError(
+                "Use either point or bounds selection, not both."
+            )
+
+        if point is not None:
+            current = current.point(**_normalize_point_selection(point))
+
+        time_range = _get_selection_value(selection, "time_range", "timeRange")
+        if time_range is not None:
+            current = current.time_range(*_normalize_time_range_selection(time_range))
+
+        if bounds is not None:
+            bounds_options = _get_selection_value(
+                selection, "bounds_options", "boundsOptions"
+            )
+            min_lat, min_lon, max_lat, max_lon, coordinate_options = (
+                _normalize_bounds_selection(bounds, bounds_options)
+            )
+            current = current.rectangle(
+                min_lat,
+                min_lon,
+                max_lat,
+                max_lon,
+                **coordinate_options,
+            )
+
+        return current
 
     def reduce_polygon_to_point(
         self, polygons_mask: gpd.array.GeometryArray
@@ -586,6 +652,8 @@ class GeotemporalData:
         rectangle_kwargs: dict = None,
         polygon_kwargs: dict = None,
         multiple_points_kwargs: dict = None,
+        bounds: BoundsSelection = None,
+        bounds_options: dict = None,
         spatial_agg_kwargs: dict = None,
         temporal_agg_kwargs: dict = None,
         rolling_agg_kwargs: dict = None,
@@ -607,6 +675,17 @@ class GeotemporalData:
             data = data.circle(lat=lat, lon=lon, radius=radius)
         elif rectangle_kwargs:
             data = data.rectangle(**rectangle_kwargs)
+        elif bounds is not None:
+            min_lat, min_lon, max_lat, max_lon, coordinate_options = (
+                _normalize_bounds_selection(bounds, bounds_options)
+            )
+            data = data.rectangle(
+                min_lat,
+                min_lon,
+                max_lat,
+                max_lon,
+                **coordinate_options,
+            )
         elif polygon_kwargs:
             data = data.polygons(**polygon_kwargs, point_limit=point_limit)
         elif multiple_points_kwargs:
@@ -646,6 +725,155 @@ class GeotemporalData:
 
     def _new(self, data):
         return type(self)(data, dataset_name=self.dataset_name, data_var=self._data_var)
+
+
+def _ensure_mapping(value: typing.Any, label: str) -> Mapping[str, typing.Any]:
+    if not isinstance(value, Mapping):
+        raise errors.InvalidSelectionError(f"{label} must be a mapping.")
+    return value
+
+
+def _get_selection_value(
+    selection: Mapping[str, typing.Any],
+    *keys: str,
+) -> typing.Any:
+    for key in keys:
+        if key in selection:
+            return selection[key]
+    return None
+
+
+def _get_required_mapping_value(
+    selection: Mapping[str, typing.Any],
+    key: str,
+    label: str,
+) -> typing.Any:
+    if key not in selection:
+        raise errors.InvalidSelectionError(f"{label} must include '{key}'.")
+    return selection[key]
+
+
+def _coerce_finite_number(value: typing.Any, label: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, numbers.Real)
+        or not math.isfinite(value)
+    ):
+        raise errors.InvalidSelectionError(
+            "Bounds selection must use finite west, south, east, and north numbers."
+        )
+    return float(value)
+
+
+def _normalize_coordinate_options(
+    options: typing.Optional[Mapping[str, typing.Any]],
+) -> dict[str, str]:
+    if options is None:
+        return {}
+    _ensure_mapping(options, "Selection options")
+
+    normalized: dict[str, str] = {}
+    latitude_key = _get_selection_value(options, "latitude_key", "latitudeKey")
+    longitude_key = _get_selection_value(options, "longitude_key", "longitudeKey")
+
+    if latitude_key is not None:
+        if not isinstance(latitude_key, str):
+            raise errors.InvalidSelectionError("latitude_key must be a string.")
+        normalized["latitude_key"] = latitude_key
+    if longitude_key is not None:
+        if not isinstance(longitude_key, str):
+            raise errors.InvalidSelectionError("longitude_key must be a string.")
+        normalized["longitude_key"] = longitude_key
+
+    return normalized
+
+
+def _normalize_bounds_selection(
+    bounds: BoundsSelection,
+    fallback_options: typing.Optional[Mapping[str, typing.Any]] = None,
+) -> tuple[float, float, float, float, dict[str, str]]:
+    if isinstance(bounds, Mapping):
+        west = _get_required_mapping_value(bounds, "west", "Bounds selection")
+        south = _get_required_mapping_value(bounds, "south", "Bounds selection")
+        east = _get_required_mapping_value(bounds, "east", "Bounds selection")
+        north = _get_required_mapping_value(bounds, "north", "Bounds selection")
+        options = bounds.get("options", fallback_options)
+    elif isinstance(bounds, (str, bytes)):
+        raise errors.InvalidSelectionError(
+            "Bounds selection must be [west, south, east, north]."
+        )
+    else:
+        try:
+            west, south, east, north = bounds
+        except (TypeError, ValueError) as exc:
+            raise errors.InvalidSelectionError(
+                "Bounds selection must be [west, south, east, north]."
+            ) from exc
+        options = fallback_options
+
+    west = _coerce_finite_number(west, "west")
+    south = _coerce_finite_number(south, "south")
+    east = _coerce_finite_number(east, "east")
+    north = _coerce_finite_number(north, "north")
+
+    if west >= east:
+        raise errors.InvalidSelectionError(
+            f"west ({west}) must be less than east ({east})."
+        )
+    if south >= north:
+        raise errors.InvalidSelectionError(
+            f"south ({south}) must be less than north ({north})."
+        )
+
+    return (
+        south,
+        west,
+        north,
+        east,
+        _normalize_coordinate_options(options),
+    )
+
+
+def _normalize_point_selection(
+    point: Mapping[str, typing.Any],
+) -> dict[str, typing.Any]:
+    point = _ensure_mapping(point, "Point selection")
+    latitude = _get_required_mapping_value(point, "latitude", "Point selection")
+    longitude = _get_required_mapping_value(point, "longitude", "Point selection")
+    options = point.get("options") or {}
+    coordinate_options = _normalize_coordinate_options(options)
+
+    snap_to_grid = _get_selection_value(options, "snap_to_grid", "snapToGrid")
+    if snap_to_grid is None:
+        snap_to_grid = True
+
+    return {
+        "latitude": latitude,
+        "longitude": longitude,
+        "snap_to_grid": snap_to_grid,
+        **coordinate_options,
+    }
+
+
+def _normalize_time_range_selection(
+    time_range: typing.Any,
+) -> tuple[typing.Any, typing.Any]:
+    if isinstance(time_range, Mapping):
+        return (
+            _get_required_mapping_value(time_range, "start", "Time range selection"),
+            _get_required_mapping_value(time_range, "end", "Time range selection"),
+        )
+    if isinstance(time_range, (str, bytes)):
+        raise errors.InvalidSelectionError(
+            "Time range selection must be [start, end] or {'start': ..., 'end': ...}."
+        )
+    try:
+        start, end = time_range
+    except (TypeError, ValueError) as exc:
+        raise errors.InvalidSelectionError(
+            "Time range selection must be [start, end] or {'start': ..., 'end': ...}."
+        ) from exc
+    return start, end
 
 
 def _haversine(

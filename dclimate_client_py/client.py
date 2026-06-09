@@ -46,6 +46,8 @@ def geo_temporal_query(
     rectangle_kwargs: dict = None,
     polygon_kwargs: dict = None,
     multiple_points_kwargs: dict = None,
+    bounds=None,
+    bounds_options: dict = None,
     spatial_agg_kwargs: dict = None,
     temporal_agg_kwargs: dict = None,
     rolling_agg_kwargs: dict = None,
@@ -82,6 +84,10 @@ def geo_temporal_query(
             circular query
         rectangle_kwargs (dict, optional): a dictionary of parameters relevant to a
             rectangular query
+        bounds (list | tuple | dict, optional): rectangular bounds in
+            ``[west, south, east, north]`` order, or a mapping with those keys.
+        bounds_options (dict, optional): optional coordinate key overrides for bounds
+            selections, using ``latitude_key`` and ``longitude_key``.
         polygon_kwargs (dict, optional): a dictionary of parameters relevant to a
             polygonal query
         multiple_points_kwargs (dict, optional): Parameters for querying multiple specific points.
@@ -118,6 +124,7 @@ def geo_temporal_query(
                     polygon_kwargs,
                     multiple_points_kwargs,
                     point_kwargs,
+                    bounds,
                 ]
                 if kwarg_dict is not None
             ]
@@ -175,6 +182,8 @@ def geo_temporal_query(
         rectangle_kwargs=rectangle_kwargs,
         polygon_kwargs=polygon_kwargs,
         multiple_points_kwargs=multiple_points_kwargs,
+        bounds=bounds,
+        bounds_options=bounds_options,
         spatial_agg_kwargs=spatial_agg_kwargs,
         temporal_agg_kwargs=temporal_agg_kwargs,
         rolling_agg_kwargs=rolling_agg_kwargs,

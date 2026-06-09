@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from dclimate_client_py import dclimate_zarr_errors as errors
+from dclimate_client_py.dclimate_client import dClimateClient
 from dclimate_client_py.geotemporal_data import GeotemporalData
 
 
@@ -123,6 +124,82 @@ class TestGeotemporalData:
         assert np.array_equal(data.data.longitude, (190, 195, 200))
 
     @staticmethod
+    def test_rectangle_custom_coordinate_keys(dataset):
+        renamed_dataset = dataset.rename({"latitude": "lat", "longitude": "lon"})
+        data = GeotemporalData(renamed_dataset, dataset_name="fake dataset")
+
+        selected = data.rectangle(
+            20,
+            190,
+            40,
+            200,
+            latitude_key="lat",
+            longitude_key="lon",
+        )
+
+        assert np.array_equal(selected.data.lat, (20, 30, 40))
+        assert np.array_equal(selected.data.lon, (190, 195, 200))
+
+    @staticmethod
+    def test_select_bounds_and_time_range(dataset):
+        data = GeotemporalData(dataset, dataset_name="fake dataset")
+        begin = datetime.datetime(2000, 1, 10)
+        end = datetime.datetime(2000, 1, 15)
+
+        selected = data.select(
+            {
+                "bounds": [190, 20, 200, 40],
+                "time_range": {"start": begin, "end": end},
+            }
+        )
+
+        assert np.array_equal(selected.data.latitude, (20, 30, 40))
+        assert np.array_equal(selected.data.longitude, (190, 195, 200))
+        assert selected.data.sizes["time"] == 6
+
+    @staticmethod
+    def test_select_object_bounds_with_coordinate_options(dataset):
+        renamed_dataset = dataset.rename({"latitude": "lat", "longitude": "lon"})
+        data = GeotemporalData(renamed_dataset, dataset_name="fake dataset")
+
+        selected = data.select(
+            {
+                "bounds": {
+                    "west": 190,
+                    "south": 20,
+                    "east": 200,
+                    "north": 40,
+                    "options": {
+                        "latitude_key": "lat",
+                        "longitude_key": "lon",
+                    },
+                }
+            }
+        )
+
+        assert np.array_equal(selected.data.lat, (20, 30, 40))
+        assert np.array_equal(selected.data.lon, (190, 195, 200))
+
+    @staticmethod
+    def test_select_rejects_point_and_bounds(dataset):
+        data = GeotemporalData(dataset, dataset_name="fake dataset")
+
+        with pytest.raises(errors.InvalidSelectionError):
+            data.select(
+                {
+                    "point": {"latitude": 20, "longitude": 190},
+                    "bounds": [190, 20, 200, 40],
+                }
+            )
+
+    @staticmethod
+    def test_select_rejects_invalid_bounds_order(dataset):
+        data = GeotemporalData(dataset, dataset_name="fake dataset")
+
+        with pytest.raises(errors.InvalidSelectionError):
+            data.select({"bounds": [200, 20, 190, 40]})
+
+    @staticmethod
     def test_time_range(dataset):
         data = GeotemporalData(dataset, dataset_name="fake dataset")
         begin = datetime.datetime(2000, 1, 10)
@@ -233,3 +310,36 @@ class TestGeotemporalData:
         assert float(min_val_rep_pt.data["u100"].values[0]) == pytest.approx(
             -9.5386962890625
         )
+
+
+@pytest.mark.asyncio
+async def test_client_select_dataset_loads_and_selects(monkeypatch, dataset):
+    dclimate = dClimateClient()
+    loaded = GeotemporalData(dataset, dataset_name="fake dataset")
+    metadata = {"slug": "fake dataset", "cid": "bafy-test"}
+
+    async def fake_load_dataset(**kwargs):
+        assert kwargs == {
+            "dataset": "temperature_2m",
+            "collection": "era5",
+            "organization": "ecmwf",
+            "variant": "finalized",
+            "return_xarray": False,
+        }
+        return loaded, metadata
+
+    monkeypatch.setattr(dclimate, "load_dataset", fake_load_dataset)
+
+    selected, selected_metadata = await dclimate.select_dataset(
+        request={
+            "dataset": "temperature_2m",
+            "collection": "era5",
+            "organization": "ecmwf",
+            "variant": "finalized",
+        },
+        selection={"bounds": [190, 20, 200, 40]},
+    )
+
+    assert selected_metadata == metadata
+    assert np.array_equal(selected.data.latitude, (20, 30, 40))
+    assert np.array_equal(selected.data.longitude, (190, 195, 200))
