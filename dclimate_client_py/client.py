@@ -66,9 +66,9 @@ def geo_temporal_query(
 
     Return either a numpy array of data values or a NetCDF file.
 
-    Only one of point, circle, rectangle, or polygon kwargs may be provided. Only one of
-    temporal or rolling aggregation kwargs may be provided, although they can be chained
-    with spatial aggregations if desired.
+    Only one of point, circle, rectangle, bounds, or polygon kwargs may be provided. Only
+    one of temporal or rolling aggregation kwargs may be provided, although they can be
+    chained with spatial aggregations if desired.
 
     Args:
         dataset_name (str): Name used to identify the dataset within the STAC catalog (for IPFS)

@@ -362,6 +362,7 @@ class dClimateClient:
             raise InvalidSelectionError("selection must be a mapping.")
 
         load_kwargs = dict(request)
+        load_kwargs.pop("return_xarray", None)
         if load_kwargs.get("cid") and "dataset" not in load_kwargs:
             load_kwargs["dataset"] = ""
 

@@ -343,3 +343,35 @@ async def test_client_select_dataset_loads_and_selects(monkeypatch, dataset):
     assert selected_metadata == metadata
     assert np.array_equal(selected.data.latitude, (20, 30, 40))
     assert np.array_equal(selected.data.longitude, (190, 195, 200))
+
+
+@pytest.mark.asyncio
+async def test_client_select_dataset_ignores_request_return_xarray(
+    monkeypatch, dataset
+):
+    dclimate = dClimateClient()
+    loaded = GeotemporalData(dataset, dataset_name="fake dataset")
+    metadata = {"slug": "fake dataset", "cid": "bafy-test"}
+
+    async def fake_load_dataset(**kwargs):
+        assert kwargs == {
+            "dataset": "temperature_2m",
+            "collection": "era5",
+            "return_xarray": False,
+        }
+        return loaded, metadata
+
+    monkeypatch.setattr(dclimate, "load_dataset", fake_load_dataset)
+
+    selected, selected_metadata = await dclimate.select_dataset(
+        request={
+            "dataset": "temperature_2m",
+            "collection": "era5",
+            "return_xarray": True,
+        },
+        selection={"bounds": [190, 20, 200, 40]},
+    )
+
+    assert selected_metadata == metadata
+    assert np.array_equal(selected.data.latitude, (20, 30, 40))
+    assert np.array_equal(selected.data.longitude, (190, 195, 200))
