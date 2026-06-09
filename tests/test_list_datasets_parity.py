@@ -188,9 +188,7 @@ def test_cids_agree(both_catalogs):
         detail = "\n".join(
             f"  {k}\n    STAC: {s}\n    IPFS: {i}" for k, s, i in mismatches[:10]
         )
-        raise AssertionError(
-            f"CID mismatch in {len(mismatches)} variants:\n{detail}"
-        )
+        raise AssertionError(f"CID mismatch in {len(mismatches)} variants:\n{detail}")
 
 
 def test_bbox_agrees(both_catalogs):
@@ -200,6 +198,7 @@ def test_bbox_agrees(both_catalogs):
 
     for key, ipfs_bbox in ipfs_bboxes.items():
         stac_bbox = stac_bboxes.get(key)
+
         # bbox is a TypedDict {"bbox": (lo, la, hi, la)} — compare structurally.
         # Tuples vs lists may differ across paths; normalize to tuple of floats.
         def _norm(b):
@@ -223,7 +222,9 @@ def test_temporal_extent_agrees(both_catalogs):
         if s is None:
             return None
         try:
-            return int(dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000)
+            return int(
+                dt.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp() * 1000
+            )
         except (ValueError, AttributeError):
             return None
 
