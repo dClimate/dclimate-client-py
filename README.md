@@ -54,6 +54,24 @@ async def main():
         data_dict = dataset_filtered.as_dict()
         print(data_dict['data'])
 
+        # Or load and select in one call.
+        western_europe, metadata = await dclimate.select_dataset(
+            request={
+                "dataset": "temperature_2m",
+                "collection": "era5",
+                "organization": "ecmwf",
+                "variant": "finalized",
+            },
+            selection={
+                # Bounds are [west, south, east, north].
+                "bounds": [-12, 35, 16, 60],
+                "time_range": {
+                    "start": datetime(2024, 1, 1),
+                    "end": datetime(2024, 1, 7, 23),
+                },
+            },
+        )
+
 # Custom IPFS endpoints (optional)
 async def main_custom_ipfs():
     async with dClimateClient(

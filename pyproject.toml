@@ -6,7 +6,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dclimate-client-py"
-version = "0.5.7" # Set a static version or handle it in versioning strategy
+version = "0.5.8" # Set a static version or handle it in versioning strategy
 description = "Python client library for accessing dClimate weather and climate data"
 readme = "README.md"
 license = {text = "MIT"}
