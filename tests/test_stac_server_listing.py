@@ -256,9 +256,7 @@ def test_resolve_cid_uses_exact_dataset_id_for_prefix_collisions(monkeypatch):
                         "dclimate:variant": "finalized",
                     },
                     "assets": {
-                        "data": {
-                            "href": "ipfs://bafy-era5-land-precip-finalized"
-                        }
+                        "data": {"href": "ipfs://bafy-era5-land-precip-finalized"}
                     },
                 },
                 {
@@ -268,11 +266,7 @@ def test_resolve_cid_uses_exact_dataset_id_for_prefix_collisions(monkeypatch):
                         "dclimate:dataset_id": "precipitation_total",
                         "dclimate:variant": "finalized",
                     },
-                    "assets": {
-                        "data": {
-                            "href": "ipfs://bafy-era5-precip-finalized"
-                        }
-                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-precip-finalized"}},
                 },
             ]
         },
@@ -301,9 +295,7 @@ def test_resolve_cid_rejects_only_prefix_dataset_match(monkeypatch):
                         "dclimate:dataset_id": "wind_u_10m_land",
                         "dclimate:variant": "finalized",
                     },
-                    "assets": {
-                        "data": {"href": "ipfs://bafy-era5-land-wind-u"}
-                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-land-wind-u"}},
                 }
             ]
         },
@@ -330,9 +322,7 @@ def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
                     "properties": {
                         "dclimate:variant": "finalized",
                     },
-                    "assets": {
-                        "data": {"href": "ipfs://bafy-era5-land-t2m"}
-                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-land-t2m"}},
                 },
                 {
                     "id": "ecmwf_era5-temperature_2m-finalized",
@@ -340,9 +330,7 @@ def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
                     "properties": {
                         "dclimate:variant": "finalized",
                     },
-                    "assets": {
-                        "data": {"href": "ipfs://bafy-era5-t2m"}
-                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-t2m"}},
                 },
             ]
         },

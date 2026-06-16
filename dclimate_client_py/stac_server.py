@@ -77,9 +77,7 @@ def resolve_cid_from_stac_server(
 
     # Filter to the exact dataset. A prefix match would conflate datasets such
     # as precipitation_total and precipitation_total_land.
-    matches = [
-        f for f in features if _feature_matches_dataset(f, collection, dataset)
-    ]
+    matches = [f for f in features if _feature_matches_dataset(f, collection, dataset)]
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
