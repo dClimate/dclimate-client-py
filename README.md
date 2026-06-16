@@ -72,6 +72,32 @@ async def main():
             },
         )
 
+# ERA5 land datasets
+#
+# ERA5 and ERA5-Land datasets are separate dataset IDs within the ECMWF ERA5
+# collection. Use list_datasets() or list_available_datasets() to inspect the
+# exact names before loading.
+async def main_era5_land():
+    async with dClimateClient() as dclimate:
+        # Non-land ERA5 total precipitation
+        precip, precip_metadata = await dclimate.load_dataset(
+            dataset="precipitation_total",
+            collection="era5",
+            organization="ecmwf",
+            variant="finalized",
+        )
+
+        # ERA5-Land total precipitation
+        land_precip, land_metadata = await dclimate.load_dataset(
+            dataset="precipitation_total_land",
+            collection="era5",
+            organization="ecmwf",
+            variant="finalized",
+        )
+
+        # ERA5-Land wind datasets follow the same pattern:
+        # dataset="wind_u_10m_land" or dataset="wind_v_10m_land"
+
 # Custom IPFS endpoints (optional)
 async def main_custom_ipfs():
     async with dClimateClient(

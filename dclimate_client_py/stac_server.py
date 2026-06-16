@@ -13,6 +13,33 @@ from .datasets import SpatialExtent, TemporalExtent
 STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
 
+def _dataset_id_from_item_id(feature_id: str, collection: str) -> Optional[str]:
+    prefix = f"{collection}-"
+    remainder = (
+        feature_id[len(prefix) :] if feature_id.startswith(prefix) else feature_id
+    )
+    dataset, _, _ = remainder.partition("-")
+    return dataset or None
+
+
+def _feature_matches_dataset(
+    feature: Dict[str, Any], collection: str, dataset: str
+) -> bool:
+    feature_collection = feature.get("collection")
+    if feature_collection and feature_collection != collection:
+        return False
+
+    props = feature.get("properties") or {}
+    dataset_id = props.get("dclimate:dataset_id")
+    if dataset_id:
+        return dataset_id == dataset
+
+    feature_id = feature.get("id")
+    if not isinstance(feature_id, str):
+        return False
+    return _dataset_id_from_item_id(feature_id, collection) == dataset
+
+
 def resolve_cid_from_stac_server(
     collection: str,
     dataset: str,
@@ -48,9 +75,9 @@ def resolve_cid_from_stac_server(
 
     features = response.json().get("features", [])
 
-    # Filter to matching dataset (item ID pattern: {collection}-{dataset}-{variant})
-    prefix = f"{collection}-{dataset}"
-    matches = [f for f in features if f["id"].startswith(prefix)]
+    # Filter to the exact dataset. A prefix match would conflate datasets such
+    # as precipitation_total and precipitation_total_land.
+    matches = [f for f in features if _feature_matches_dataset(f, collection, dataset)]
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 

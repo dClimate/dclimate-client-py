@@ -16,6 +16,7 @@ import requests
 
 from dclimate_client_py.stac_server import (
     list_available_datasets_from_stac_server,
+    resolve_cid_from_stac_server,
 )
 
 
@@ -238,6 +239,111 @@ def test_groups_multiple_variants_under_same_dataset(monkeypatch):
     assert {v["variant"] for v in era5_variants} == {"finalized", "non_finalized"}
     assert all(v["dataset"] == "temperature_2m" for v in era5_variants)
     assert result["ecmwf_era5"]["types"] == ["temperature_2m"]
+
+
+def test_resolve_cid_uses_exact_dataset_id_for_prefix_collisions(monkeypatch):
+    """Base ERA5 datasets must not resolve to similarly named *_land datasets."""
+    _install_mocks(
+        monkeypatch,
+        collections_body=SAMPLE_COLLECTIONS,
+        search_body={
+            "features": [
+                {
+                    "id": "ecmwf_era5-precipitation_total_land-finalized",
+                    "collection": "ecmwf_era5",
+                    "properties": {
+                        "dclimate:dataset_id": "precipitation_total_land",
+                        "dclimate:variant": "finalized",
+                    },
+                    "assets": {
+                        "data": {"href": "ipfs://bafy-era5-land-precip-finalized"}
+                    },
+                },
+                {
+                    "id": "ecmwf_era5-precipitation_total-finalized",
+                    "collection": "ecmwf_era5",
+                    "properties": {
+                        "dclimate:dataset_id": "precipitation_total",
+                        "dclimate:variant": "finalized",
+                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-precip-finalized"}},
+                },
+            ]
+        },
+    )
+
+    cid = resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "precipitation_total",
+        "finalized",
+        "https://example.test",
+    )
+
+    assert cid == "bafy-era5-precip-finalized"
+
+
+def test_resolve_cid_rejects_only_prefix_dataset_match(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body=SAMPLE_COLLECTIONS,
+        search_body={
+            "features": [
+                {
+                    "id": "ecmwf_era5-wind_u_10m_land-finalized",
+                    "collection": "ecmwf_era5",
+                    "properties": {
+                        "dclimate:dataset_id": "wind_u_10m_land",
+                        "dclimate:variant": "finalized",
+                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-land-wind-u"}},
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="No items found"):
+        resolve_cid_from_stac_server(
+            "ecmwf_era5",
+            "wind_u_10m",
+            "finalized",
+            "https://example.test",
+        )
+
+
+def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body=SAMPLE_COLLECTIONS,
+        search_body={
+            "features": [
+                {
+                    "id": "ecmwf_era5-temperature_2m_land-finalized",
+                    "collection": "ecmwf_era5",
+                    "properties": {
+                        "dclimate:variant": "finalized",
+                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-land-t2m"}},
+                },
+                {
+                    "id": "ecmwf_era5-temperature_2m-finalized",
+                    "collection": "ecmwf_era5",
+                    "properties": {
+                        "dclimate:variant": "finalized",
+                    },
+                    "assets": {"data": {"href": "ipfs://bafy-era5-t2m"}},
+                },
+            ]
+        },
+    )
+
+    cid = resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "temperature_2m",
+        "finalized",
+        "https://example.test",
+    )
+
+    assert cid == "bafy-era5-t2m"
 
 
 def test_collections_endpoint_error_propagates(monkeypatch):
