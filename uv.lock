@@ -632,7 +632,7 @@ wheels = [
 
 [[package]]
 name = "dclimate-client-py"
-version = "0.5.5"
+version = "0.5.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -677,7 +677,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
     { name = "pandas" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "py-hamt", specifier = ">=3.3.1" },
+    { name = "py-hamt", specifier = ">=3.4.0" },
     { name = "pyarrow" },
     { name = "pycryptodome", specifier = ">=3.21.0" },
     { name = "pystac", specifier = ">=1.10.0" },
@@ -1455,19 +1455,20 @@ wheels = [
 
 [[package]]
 name = "py-hamt"
-version = "3.3.1"
+version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dag-cbor" },
     { name = "httpx", extra = ["http2"] },
     { name = "msgspec" },
     { name = "multiformats", extra = ["full"] },
+    { name = "opentelemetry-api" },
     { name = "pycryptodome" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/46/c3371ca00d00787f168f119afe477fb691c1dd3555e19a6a27f2204964cf/py_hamt-3.3.1.tar.gz", hash = "sha256:65a6c22fb3ba50cc382f6c78427e7269442d43725e3cdf027a53b92edd44d8e5", size = 202731, upload-time = "2025-12-01T13:45:46.787Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/02/58/b563c568fde2dca469dd5f1aeb90362393ba1b0f658dbfd5f3bb671c19df/py_hamt-3.4.0.tar.gz", hash = "sha256:13095e96cefca2d1a9bbc36e571b627f7c1ada2c3253771da5c549d3e7984aa2", size = 226710, upload-time = "2026-07-07T18:03:55.703Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/08/3b9d9ca319891a507f17bc515c4c0afdc684a0707accfa8537f23a9c28c2/py_hamt-3.3.1-py3-none-any.whl", hash = "sha256:e9836fe9d9e73978353b58fd74d95fe94336eaa0c4e36879c25959c812433083", size = 45857, upload-time = "2025-12-01T13:45:45.463Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/0f/241808122e1be49b00ed4db6e6edff7a230f19dcee12bd9657d1f7226b6d/py_hamt-3.4.0-py3-none-any.whl", hash = "sha256:ee2f82a4de475e7693276f10298af3f6b9f643507b5eacd81af6ad9f68c05696", size = 58714, upload-time = "2026-07-07T18:03:57.368Z" },
 ]
 
 [[package]]
