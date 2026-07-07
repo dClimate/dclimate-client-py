@@ -122,9 +122,7 @@ class dClimateClient:
             self._kubo_cas = None
 
     @staticmethod
-    def _apply_zarr_group_metadata(
-        ds: xr.Dataset, metadata: DatasetMetadata
-    ) -> None:
+    def _apply_zarr_group_metadata(ds: xr.Dataset, metadata: DatasetMetadata) -> None:
         loaded_zarr_group = ds.attrs.get("_ipfs_zarr_group")
         if isinstance(loaded_zarr_group, str):
             metadata["zarr_group"] = loaded_zarr_group
