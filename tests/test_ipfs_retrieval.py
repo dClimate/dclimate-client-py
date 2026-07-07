@@ -16,6 +16,18 @@ class DummyKuboCAS:
     gateway_base_url = "http://example.test"
 
 
+class DummyStore:
+    pass
+
+
+class DummyGroupedStore:
+    def _v2_requires_explicit_group_for_root_read(self):
+        return True
+
+    def _v2_top_level_groups(self):
+        return {"1", "0"}
+
+
 @pytest.fixture(autouse=True)
 def check_ipfs_connection():
     return None
@@ -57,13 +69,6 @@ async def test_sharded_connection_error_skips_hamt_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
-    class DummyGroupedStore:
-        def _v2_requires_explicit_group_for_root_read(self):
-            return True
-
-        def _v2_top_level_groups(self):
-            return {"1", "0"}
-
     async def sharded_open(*, root_cid, cas, read_only):
         return DummyGroupedStore()
 
@@ -88,9 +93,6 @@ async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
-    class DummyStore:
-        pass
-
     async def sharded_open(*, root_cid, cas, read_only):
         return DummyStore()
 
@@ -115,9 +117,6 @@ async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch):
-    class DummyStore:
-        pass
-
     async def sharded_open(*, root_cid, cas, read_only):
         return DummyStore()
 
@@ -140,9 +139,6 @@ async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch
 
 @pytest.mark.asyncio
 async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
-    class DummyStore:
-        pass
-
     async def sharded_open(*, root_cid, cas, read_only):
         warnings.warn(
             "sharded_zarr_v1 is deprecated",
@@ -172,6 +168,40 @@ async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
         )
         for warning in caught_warnings
     )
+
+
+@pytest.mark.asyncio
+async def test_hamt_fallback_preserves_explicit_zarr_group(monkeypatch):
+    async def sharded_open(*, root_cid, cas, read_only):
+        raise ValueError("not a sharded zarr store")
+
+    async def hamt_build(**kwargs):
+        return DummyStore()
+
+    opened_groups = []
+
+    def open_zarr(*, store, group=None):
+        opened_groups.append(group)
+        return xr.Dataset()
+
+    monkeypatch.setattr(ipfs_retrieval.ShardedZarrStore, "open", sharded_open)
+    monkeypatch.setattr(ipfs_retrieval.HAMT, "build", hamt_build)
+    monkeypatch.setattr(
+        ipfs_retrieval,
+        "ZarrHAMTStore",
+        lambda hamt_store, read_only: hamt_store,
+    )
+    monkeypatch.setattr(ipfs_retrieval.xr, "open_zarr", open_zarr)
+
+    ds = await ipfs_retrieval._load_dataset_from_ipfs_cid(
+        VALID_CID,
+        DummyKuboCAS(),
+        zarr_group="/2/",
+    )
+
+    assert opened_groups == ["2"]
+    assert ds.attrs["_ipfs_store_type"] == "ZarrHAMTStore"
+    assert ds.attrs["_ipfs_zarr_group"] == "2"
 
 
 @pytest.mark.asyncio

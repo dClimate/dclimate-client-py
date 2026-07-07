@@ -121,6 +121,14 @@ class dClimateClient:
             await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
             self._kubo_cas = None
 
+    @staticmethod
+    def _apply_zarr_group_metadata(
+        ds: xr.Dataset, metadata: DatasetMetadata
+    ) -> None:
+        loaded_zarr_group = ds.attrs.get("_ipfs_zarr_group")
+        if isinstance(loaded_zarr_group, str):
+            metadata["zarr_group"] = loaded_zarr_group
+
     async def load_dataset(
         self,
         dataset: str,
@@ -248,9 +256,7 @@ class dClimateClient:
                     else None
                 ),
             }
-            loaded_zarr_group = ds.attrs.get("_ipfs_zarr_group")
-            if isinstance(loaded_zarr_group, str):
-                metadata["zarr_group"] = loaded_zarr_group
+            self._apply_zarr_group_metadata(ds, metadata)
 
             if return_xarray:
                 return ds, metadata
@@ -332,9 +338,7 @@ class dClimateClient:
                 else None
             ),
         }
-        loaded_zarr_group = ds.attrs.get("_ipfs_zarr_group")
-        if isinstance(loaded_zarr_group, str):
-            metadata["zarr_group"] = loaded_zarr_group
+        self._apply_zarr_group_metadata(ds, metadata)
 
         if return_xarray:
             return ds, metadata
