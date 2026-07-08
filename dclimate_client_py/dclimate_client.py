@@ -121,6 +121,12 @@ class dClimateClient:
             await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
             self._kubo_cas = None
 
+    @staticmethod
+    def _apply_zarr_group_metadata(ds: xr.Dataset, metadata: DatasetMetadata) -> None:
+        loaded_zarr_group = ds.attrs.get("_ipfs_zarr_group")
+        if isinstance(loaded_zarr_group, str):
+            metadata["zarr_group"] = loaded_zarr_group
+
     async def load_dataset(
         self,
         dataset: str,
@@ -129,6 +135,7 @@ class dClimateClient:
         organization: typing.Optional[str] = None,
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
+        zarr_group: typing.Optional[str] = None,
     ) -> typing.Union[
         typing.Tuple[GeotemporalData, DatasetMetadata],
         typing.Tuple[xr.Dataset, DatasetMetadata],
@@ -160,6 +167,10 @@ class dClimateClient:
         return_xarray : bool, optional
             If True, return raw xarray.Dataset. If False (default), return
             GeotemporalData wrapper.
+        zarr_group : str, optional
+            Explicit Zarr group to open for grouped/pyramid sharded stores. If
+            omitted, py-hamt v2 stores with multiple top-level groups default
+            to group "0" when available.
 
         Returns
         -------
@@ -223,6 +234,7 @@ class dClimateClient:
             ds = await _load_dataset_from_ipfs_cid(
                 ipfs_cid=cid,
                 kubo_cas=self._kubo_cas,
+                zarr_group=zarr_group,
             )
 
             # Build metadata for direct CID case
@@ -242,6 +254,7 @@ class dClimateClient:
                     else None
                 ),
             }
+            self._apply_zarr_group_metadata(ds, metadata)
 
             if return_xarray:
                 return ds, metadata
@@ -299,6 +312,7 @@ class dClimateClient:
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=final_cid,
             kubo_cas=self._kubo_cas,
+            zarr_group=zarr_group,
         )
 
         # Build metadata for STAC case
@@ -322,6 +336,7 @@ class dClimateClient:
                 else None
             ),
         }
+        self._apply_zarr_group_metadata(ds, metadata)
 
         if return_xarray:
             return ds, metadata

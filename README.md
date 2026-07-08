@@ -120,6 +120,7 @@ async def main_xarray():
             collection="era5",
             organization="ecmwf",
             variant="finalized",
+            zarr_group="0",  # Optional for grouped/pyramid sharded stores
             return_xarray=True  # Returns xarray.Dataset
         )
         print(xr_dataset)

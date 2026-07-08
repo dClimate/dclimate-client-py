@@ -139,6 +139,7 @@ async def load_dataset(
     organization: Optional[str] = None,  # Organization/agency that owns the collection
     cid: Optional[str] = None,       # Direct CID override (bypasses STAC)
     return_xarray: bool = False,     # Return raw xarray.Dataset instead of GeotemporalData
+    zarr_group: Optional[str] = None, # Explicit Zarr group for grouped/pyramid stores
 ) -> Union[
     Tuple[GeotemporalData, DatasetMetadata],
     Tuple[xr.Dataset, DatasetMetadata]
@@ -155,6 +156,7 @@ async def load_dataset(
   inferred from the root catalog metadata.
 - `cid`: Optional direct CID to bypass STAC catalog resolution
 - `return_xarray`: If True, return raw `xarray.Dataset`, otherwise return `GeotemporalData` wrapper
+- `zarr_group`: Optional Zarr group to open. If omitted, multi-group py-hamt v2 stores default to group `"0"` when available.
 
 **Returns:**
 - Tuple of (dataset, metadata)
@@ -169,6 +171,7 @@ async def load_dataset(
     - `url`: Always None for STAC-based loading
     - `timestamp`: Always None for STAC-based loading
     - `organization`: The resolved organization id when available
+    - `zarr_group`: Present when an explicit or inferred Zarr group was opened
 
 **Raises:**
 - `RuntimeError`: If client is not used as async context manager
@@ -203,7 +206,8 @@ async with dClimateClient() as client:
         dataset="temperature",  # Used for metadata only
         collection="ecmwf_ifs",
         organization="ecmwf",
-        cid="bafybeiabc123..."
+        cid="bafybeiabc123...",
+        zarr_group="0"
     )
     # metadata['source'] will be 'direct_cid'
 ```

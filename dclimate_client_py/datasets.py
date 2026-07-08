@@ -96,6 +96,7 @@ class DatasetMetadata(TypedDict, total=False):
         "catalog", "stac", "direct_cid"
     ]  # How the dataset was loaded
     organization: Optional[str]
+    zarr_group: Optional[str]
 
 
 # --- Helper Functions ---

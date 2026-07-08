@@ -6,13 +6,20 @@ This module provides functions for loading Zarr datasets from IPFS using KuboCAS
 
 import logging
 import time
+import warnings
 from typing import Any
 
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
 from opentelemetry.trace import Span, Status, StatusCode
-from py_hamt import HAMT, KuboCAS, ShardedZarrStore, ZarrHAMTStore
+from py_hamt import (
+    HAMT,
+    KuboCAS,
+    ShardedZarrStore,
+    ShardedZarrV1DeprecationWarning,
+    ZarrHAMTStore,
+)
 
 try:
     import py_hamt.instrumentation as ipfs_instrumentation
@@ -146,12 +153,95 @@ def _is_connection_error(exc: Exception) -> bool:
     )
 
 
+def _normalize_zarr_group(zarr_group: str | None) -> str | None:
+    """Normalize optional Zarr group names for xarray."""
+    if zarr_group is None:
+        return None
+    normalized = zarr_group.strip("/")
+    return normalized or None
+
+
+def _zarr_group_candidates(store: Any) -> list[str]:
+    """Return safe default Zarr groups from py-hamt v2 stores."""
+    groups_getter = getattr(store, "_v2_top_level_groups", None)
+    if not callable(groups_getter):
+        return []
+
+    try:
+        groups = groups_getter()
+    except Exception:
+        return []
+
+    normalized_groups = sorted(
+        group.strip("/") for group in groups if isinstance(group, str) and group
+    )
+    if "0" not in normalized_groups:
+        return []
+    return ["0"]
+
+
+def _store_requires_explicit_zarr_group(store: Any) -> bool:
+    """Return whether py-hamt says a root read needs an explicit group."""
+    requires_getter = getattr(store, "_v2_requires_explicit_group_for_root_read", None)
+    if not callable(requires_getter):
+        return False
+
+    try:
+        return bool(requires_getter())
+    except Exception:
+        return False
+
+
+def _is_explicit_zarr_group_error(exc: Exception) -> bool:
+    """Classify py-hamt's multi-group root-read error."""
+    text = str(exc)
+    return "explicit Zarr group" in text or "group='0'" in text
+
+
+def _open_zarr_from_store(
+    store: Any,
+    *,
+    zarr_group: str | None = None,
+) -> tuple[xr.Dataset, str | None]:
+    """Open a Zarr store, choosing a default group for py-hamt v2 pyramids."""
+    normalized_group = _normalize_zarr_group(zarr_group)
+    if normalized_group is not None:
+        return xr.open_zarr(store=store, group=normalized_group), normalized_group
+
+    if _store_requires_explicit_zarr_group(store):
+        for candidate_group in _zarr_group_candidates(store):
+            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+
+    try:
+        return xr.open_zarr(store=store), None
+    except ValueError as exc:
+        if not _is_explicit_zarr_group_error(exc):
+            raise
+        for candidate_group in _zarr_group_candidates(store):
+            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+        raise
+
+
+async def _open_sharded_zarr_store(
+    *,
+    ipfs_cid: str,
+    kubo_cas: KuboCAS,
+) -> ShardedZarrStore:
+    """Open a py-hamt sharded store without surfacing legacy v1 read warnings."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=ShardedZarrV1DeprecationWarning)
+        return await ShardedZarrStore.open(
+            root_cid=ipfs_cid, cas=kubo_cas, read_only=True
+        )
+
+
 # --- Zarr Dataset Loading ---
 
 
 async def _load_dataset_from_ipfs_cid(
     ipfs_cid: str,
     kubo_cas: KuboCAS,
+    zarr_group: str | None = None,
 ) -> xr.Dataset:
     """
     Internal function to load a Zarr dataset from IPFS using a provided KuboCAS instance.
@@ -163,6 +253,9 @@ async def _load_dataset_from_ipfs_cid(
     Args:
         ipfs_cid (str): The IPFS CID of the Zarr dataset's root node.
         kubo_cas (KuboCAS): An active KuboCAS instance to use for loading.
+        zarr_group (str, optional): Explicit Zarr group to open. If omitted and
+            py-hamt reports a multi-group sharded v2 store, group "0" is used
+            when available.
 
     Returns:
         xr.Dataset: The loaded dataset.
@@ -206,6 +299,7 @@ async def _load_dataset_from_ipfs_cid(
                     f"Attempting to load as ShardedZarrStore from CID: {ipfs_cid}"
                 )
                 sharded_start = time.perf_counter()
+                sharded_store_opened = False
                 with _TRACER.start_as_current_span(
                     "dclimate_client.ipfs.open_sharded_store",
                     attributes=_attributes(
@@ -218,10 +312,15 @@ async def _load_dataset_from_ipfs_cid(
                     set_status_on_exception=False,
                 ) as sharded_span:
                     try:
-                        sharded_store = await ShardedZarrStore.open(
-                            root_cid=ipfs_cid, cas=kubo_cas, read_only=True
+                        sharded_store = await _open_sharded_zarr_store(
+                            ipfs_cid=ipfs_cid,
+                            kubo_cas=kubo_cas,
                         )
-                        ds = xr.open_zarr(store=sharded_store)
+                        sharded_store_opened = True
+                        ds, opened_zarr_group = _open_zarr_from_store(
+                            sharded_store,
+                            zarr_group=zarr_group,
+                        )
                     except Exception as sharded_err:
                         sharded_seconds = time.perf_counter() - sharded_start
                         _record_store_open(
@@ -240,6 +339,8 @@ async def _load_dataset_from_ipfs_cid(
                         seconds=sharded_seconds,
                     )
                 ds.attrs["_ipfs_store_type"] = "ShardedZarrStore"
+                if opened_zarr_group is not None:
+                    ds.attrs["_ipfs_zarr_group"] = opened_zarr_group
                 ipfs_instrumentation.observe(
                     "dclimate_client.open_sharded_store_seconds",
                     sharded_seconds,
@@ -257,6 +358,8 @@ async def _load_dataset_from_ipfs_cid(
                         f"IPFS connection failed while loading dataset from CID {ipfs_cid}. Details: {sharded_err}"
                     )
                     raise connection_error from sharded_err
+                if sharded_store_opened:
+                    raise
 
                 # Fall back to HAMT store if sharded loading fails
                 if dataset_span.is_recording():
@@ -290,7 +393,10 @@ async def _load_dataset_from_ipfs_cid(
                         # Wrap with ZarrHAMTStore adapter
                         zarr_hamt_store = ZarrHAMTStore(hamt_store, read_only=True)
 
-                        ds = xr.open_zarr(store=zarr_hamt_store)
+                        ds, opened_zarr_group = _open_zarr_from_store(
+                            zarr_hamt_store,
+                            zarr_group=zarr_group,
+                        )
                     except Exception as hamt_err:
                         hamt_seconds = time.perf_counter() - hamt_start
                         _record_store_open(
@@ -309,6 +415,8 @@ async def _load_dataset_from_ipfs_cid(
                         seconds=hamt_seconds,
                     )
                 ds.attrs["_ipfs_store_type"] = "ZarrHAMTStore"
+                if opened_zarr_group is not None:
+                    ds.attrs["_ipfs_zarr_group"] = opened_zarr_group
                 ipfs_instrumentation.observe(
                     "dclimate_client.open_hamt_store_seconds",
                     hamt_seconds,
@@ -365,6 +473,7 @@ async def _get_dataset_by_ipfs_cid(
     ipfs_cid: str,
     gateway_uri_stem: str | None = None,
     rpc_uri_stem: str | None = None,
+    zarr_group: str | None = None,
 ) -> xr.Dataset:
     """
     Gets an xarray dataset directly from its Zarr root IPFS CID.
@@ -379,6 +488,7 @@ async def _get_dataset_by_ipfs_cid(
         ipfs_cid (str): The IPFS CID of the Zarr dataset's root node.
         gateway_uri_stem (str, optional): Custom IPFS HTTP Gateway URI stem.
         rpc_uri_stem (str, optional): Custom IPFS RPC API URI stem.
+        zarr_group (str, optional): Explicit Zarr group to open.
 
     Returns:
         xr.Dataset: The loaded dataset.
@@ -390,4 +500,8 @@ async def _get_dataset_by_ipfs_cid(
     async with KuboCAS(
         rpc_base_url=rpc_uri_stem, gateway_base_url=gateway_uri_stem
     ) as kubo_cas:
-        return await _load_dataset_from_ipfs_cid(ipfs_cid, kubo_cas)
+        return await _load_dataset_from_ipfs_cid(
+            ipfs_cid,
+            kubo_cas,
+            zarr_group=zarr_group,
+        )
