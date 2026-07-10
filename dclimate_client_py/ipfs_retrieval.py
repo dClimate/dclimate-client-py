@@ -16,6 +16,7 @@ from opentelemetry.trace import Span, Status, StatusCode
 from py_hamt import (
     HAMT,
     KuboCAS,
+    ShardReadMode,
     ShardedZarrStore,
     ShardedZarrV1DeprecationWarning,
     ZarrHAMTStore,
@@ -226,12 +227,16 @@ async def _open_sharded_zarr_store(
     *,
     ipfs_cid: str,
     kubo_cas: KuboCAS,
+    shard_read_mode: ShardReadMode = "sparse",
 ) -> ShardedZarrStore:
     """Open a py-hamt sharded store without surfacing legacy v1 read warnings."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=ShardedZarrV1DeprecationWarning)
         return await ShardedZarrStore.open(
-            root_cid=ipfs_cid, cas=kubo_cas, read_only=True
+            root_cid=ipfs_cid,
+            cas=kubo_cas,
+            read_only=True,
+            shard_read_mode=shard_read_mode,
         )
 
 
@@ -242,6 +247,7 @@ async def _load_dataset_from_ipfs_cid(
     ipfs_cid: str,
     kubo_cas: KuboCAS,
     zarr_group: str | None = None,
+    shard_read_mode: ShardReadMode = "sparse",
 ) -> xr.Dataset:
     """
     Internal function to load a Zarr dataset from IPFS using a provided KuboCAS instance.
@@ -315,6 +321,7 @@ async def _load_dataset_from_ipfs_cid(
                         sharded_store = await _open_sharded_zarr_store(
                             ipfs_cid=ipfs_cid,
                             kubo_cas=kubo_cas,
+                            shard_read_mode=shard_read_mode,
                         )
                         sharded_store_opened = True
                         ds, opened_zarr_group = _open_zarr_from_store(

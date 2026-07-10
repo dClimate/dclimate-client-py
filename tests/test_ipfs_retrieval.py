@@ -51,7 +51,7 @@ def test_is_connection_error_classifies_gateway_failures(message):
 
 @pytest.mark.asyncio
 async def test_sharded_connection_error_skips_hamt_fallback(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    async def sharded_open(**kwargs):
         raise TimeoutError("timed out opening sharded store")
 
     async def hamt_build(**kwargs):
@@ -69,7 +69,10 @@ async def test_sharded_connection_error_skips_hamt_fallback(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    open_kwargs = []
+
+    async def sharded_open(**kwargs):
+        open_kwargs.append(kwargs)
         return DummyGroupedStore()
 
     opened_groups = []
@@ -87,13 +90,14 @@ async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
     )
 
     assert opened_groups == ["0"]
+    assert open_kwargs[0]["shard_read_mode"] == "sparse"
     assert ds.attrs["_ipfs_store_type"] == "ShardedZarrStore"
     assert ds.attrs["_ipfs_zarr_group"] == "0"
 
 
 @pytest.mark.asyncio
 async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    async def sharded_open(**kwargs):
         return DummyStore()
 
     opened_groups = []
@@ -117,7 +121,7 @@ async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    async def sharded_open(**kwargs):
         return DummyStore()
 
     async def hamt_build(**kwargs):
@@ -139,7 +143,7 @@ async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch
 
 @pytest.mark.asyncio
 async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    async def sharded_open(**kwargs):
         warnings.warn(
             "sharded_zarr_v1 is deprecated",
             ipfs_retrieval.ShardedZarrV1DeprecationWarning,
@@ -172,7 +176,7 @@ async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_hamt_fallback_preserves_explicit_zarr_group(monkeypatch):
-    async def sharded_open(*, root_cid, cas, read_only):
+    async def sharded_open(**kwargs):
         raise ValueError("not a sharded zarr store")
 
     async def hamt_build(**kwargs):
@@ -206,9 +210,12 @@ async def test_hamt_fallback_preserves_explicit_zarr_group(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_client_direct_cid_passes_zarr_group_and_records_metadata(monkeypatch):
-    async def load_dataset_from_ipfs_cid(*, ipfs_cid, kubo_cas, zarr_group):
+    async def load_dataset_from_ipfs_cid(
+        *, ipfs_cid, kubo_cas, zarr_group, shard_read_mode
+    ):
         assert ipfs_cid == VALID_CID
         assert zarr_group == "2"
+        assert shard_read_mode == "sparse"
         return xr.Dataset(attrs={"_ipfs_zarr_group": "2"})
 
     monkeypatch.setattr(
@@ -225,6 +232,7 @@ async def test_client_direct_cid_passes_zarr_group_and_records_metadata(monkeypa
         cid=VALID_CID,
         return_xarray=True,
         zarr_group="2",
+        shard_read_mode="sparse",
     )
 
     assert isinstance(ds, xr.Dataset)
