@@ -136,7 +136,7 @@ class dClimateClient:
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
         zarr_group: typing.Optional[str] = None,
-        shard_read_mode: typing.Literal["full", "sparse"] = "full",
+        shard_read_mode: typing.Literal["full", "sparse"] = "sparse",
     ) -> typing.Union[
         typing.Tuple[GeotemporalData, DatasetMetadata],
         typing.Tuple[xr.Dataset, DatasetMetadata],
@@ -173,9 +173,9 @@ class dClimateClient:
             omitted, py-hamt v2 stores with multiple top-level groups default
             to group "0" when available.
         shard_read_mode : {"full", "sparse"}, optional
-            Sharded Zarr shard-index read strategy. ``"full"`` preserves the
-            existing decoded-shard cache behavior; ``"sparse"`` decodes only
-            the requested shard slot on read-only cache misses.
+            Sharded Zarr shard-index read strategy. Defaults to ``"sparse"``
+            and decodes only the requested shard slot on read-only cache
+            misses. ``"full"`` preserves the decoded-shard cache behavior.
 
         Returns
         -------

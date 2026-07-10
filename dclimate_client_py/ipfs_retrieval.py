@@ -227,7 +227,7 @@ async def _open_sharded_zarr_store(
     *,
     ipfs_cid: str,
     kubo_cas: KuboCAS,
-    shard_read_mode: ShardReadMode = "full",
+    shard_read_mode: ShardReadMode = "sparse",
 ) -> ShardedZarrStore:
     """Open a py-hamt sharded store without surfacing legacy v1 read warnings."""
     with warnings.catch_warnings():
@@ -247,7 +247,7 @@ async def _load_dataset_from_ipfs_cid(
     ipfs_cid: str,
     kubo_cas: KuboCAS,
     zarr_group: str | None = None,
-    shard_read_mode: ShardReadMode = "full",
+    shard_read_mode: ShardReadMode = "sparse",
 ) -> xr.Dataset:
     """
     Internal function to load a Zarr dataset from IPFS using a provided KuboCAS instance.
