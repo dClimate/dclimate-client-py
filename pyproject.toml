@@ -6,7 +6,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dclimate-client-py"
-version = "0.5.10" # Set a static version or handle it in versioning strategy
+version = "0.5.11" # Set a static version or handle it in versioning strategy
 description = "Python client library for accessing dClimate weather and climate data"
 readme = "README.md"
 license = {text = "MIT"}
@@ -34,7 +34,7 @@ dependencies = [
     "rioxarray",
     "zarr>=3.0.8",
     "numpy>=2.1.3",
-    "py_hamt>=3.4.0",
+    "py_hamt>=3.4.1",
     "requests",
     "pyarrow",
     "geopandas",
