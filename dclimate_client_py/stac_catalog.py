@@ -30,7 +30,7 @@ def get_root_catalog_cid() -> str:
         KeyError: If the response doesn't contain the expected 'cid' field
     """
     url = "https://ipfs-gateway.dclimate.net/stac"
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -123,6 +123,9 @@ class IPFSStacIO(pystac.StacIO):
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
         self.gateway_url = gateway_url.rstrip("/")
+        # Shared across asyncio.to_thread workers. urllib3's connection pool
+        # is thread-safe for stateless GETs; the cookie jar is not, but IPFS
+        # gateway reads never depend on cookies.
         self.session = requests.Session()
 
     def read_text(self, source: str, *args, **kwargs) -> str:
@@ -181,7 +184,10 @@ def load_stac_catalog(
     if root_cid is None:
         root_cid = get_root_catalog_cid()
 
-    # Set up custom IPFS I/O handler
+    # Set up custom IPFS I/O handler. NOTE: set_default mutates process-global
+    # pystac state; concurrent loads with different gateway URLs race on it.
+    # The catalog itself binds stac_io at from_file time, which limits the
+    # blast radius to lazily-resolved links of other concurrently-built roots.
     stac_io = IPFSStacIO(gateway_url)
     pystac.StacIO.set_default(lambda: stac_io)
 

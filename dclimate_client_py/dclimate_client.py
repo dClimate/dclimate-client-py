@@ -449,10 +449,16 @@ class dClimateClient:
                 ...
             }
 
+        Notes
+        -----
+        This is a synchronous method: on the IPFS-catalog fallback path it
+        performs blocking network I/O and will stall a running event loop.
+        Inside async code prefer ``await client.alist_datasets()``.
+
         Examples
         --------
         >>> async with dClimateClient() as client:
-        ...     datasets = client.list_datasets()
+        ...     datasets = await client.alist_datasets()
         ...     print(datasets["ecmwf_ifs"]["types"])
         ['temperature', 'precipitation', 'wind_u', 'wind_v', ...]
         """
@@ -473,6 +479,32 @@ class dClimateClient:
             self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
 
         return list_available_datasets(self._stac_catalog)
+
+    async def alist_datasets(self) -> typing.Dict[str, typing.Dict[str, typing.Any]]:
+        """Async variant of :meth:`list_datasets`.
+
+        Runs the blocking STAC/catalog work in a thread so the event loop
+        (and py-hamt's concurrent chunk fetches) never stall, and shares the
+        catalog lazy-init lock with :meth:`load_dataset`.
+        """
+        if self._stac_server_url:
+            try:
+                return await asyncio.to_thread(
+                    list_available_datasets_from_stac_server, self._stac_server_url
+                )
+            except (requests.RequestException, ValueError):
+                pass
+
+        from .stac_catalog import load_stac_catalog, list_available_datasets
+
+        if self._stac_catalog is None:
+            async with self._stac_catalog_lock:
+                if self._stac_catalog is None:
+                    self._stac_catalog = await asyncio.to_thread(
+                        load_stac_catalog, gateway_url=self._gateway_base_url
+                    )
+
+        return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
 
     # ------------------------------------------------------------------
     # Siren REST API methods

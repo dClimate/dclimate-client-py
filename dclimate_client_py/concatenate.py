@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def find_split_index(
-    combined_coords: typing.Any,
     next_coords: typing.Any,
     last_coord_value: typing.Any,
 ) -> int:
@@ -27,7 +26,6 @@ def find_split_index(
     This prevents duplicate data when concatenating datasets.
 
     Args:
-        combined_coords: Coordinates from the combined dataset (for reference)
         next_coords: Coordinates from the next variant to concatenate
         last_coord_value: The last coordinate value from the combined dataset
 
@@ -109,10 +107,11 @@ async def concatenate_datasets(
     Implements smart concatenation logic:
     1. Start with first dataset (highest priority)
     2. For each subsequent dataset:
-       - Find the last coordinate value in combined dataset
-       - Find split index in next dataset where coords > last coord
+       - Find split index in next dataset where coords > the last coord
+         accepted so far
        - Slice next dataset to only include new data
-       - Concatenate sliced dataset
+    3. Concatenate all accepted slices with a single ``xr.concat`` call
+       (an iterative per-dataset concat is O(n^2) time and ~2x peak memory)
 
     Args:
         datasets: List of xarray datasets to concatenate (in priority order)
@@ -165,7 +164,6 @@ async def concatenate_datasets(
         # Find where to split the next dataset
         try:
             split_index = find_split_index(
-                combined[dimension].values,
                 next_coords,
                 last_coord_value,
             )
