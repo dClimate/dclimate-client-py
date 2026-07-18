@@ -144,6 +144,9 @@ async def concatenate_datasets(
 
     # Start with the first dataset (highest priority)
     combined = datasets[0]
+    datasets_to_concat = [combined]
+    last_coord_value = combined[dimension].values[-1]
+    total_coord_count = len(combined[dimension])
     logger.debug(
         f"Starting with dataset 1/{len(datasets)}, "
         f"{dimension} range: {combined[dimension].values[0]} to {combined[dimension].values[-1]}"
@@ -151,9 +154,6 @@ async def concatenate_datasets(
 
     # Concatenate each subsequent dataset
     for i, next_ds in enumerate(datasets[1:], start=2):
-        # Get the last coordinate value from combined dataset
-        last_coord_value = combined[dimension].values[-1]
-
         # Get coordinates from next dataset
         next_coords = next_ds[dimension].values
 
@@ -177,24 +177,25 @@ async def concatenate_datasets(
 
             # Slice the next dataset to only include new data
             sliced_next = next_ds.isel({dimension: slice(split_index, None)})
+            datasets_to_concat.append(sliced_next)
+            last_coord_value = sliced_next[dimension].values[-1]
+            total_coord_count += len(sliced_next[dimension])
 
             logger.debug(
                 f"Sliced dataset {i} to {len(sliced_next[dimension])} new coords"
             )
 
-            # Concatenate with combined dataset
-            combined = xr.concat(
-                [combined, sliced_next],
-                dim=dimension,
-            )
             logger.debug(
-                f"After concatenating dataset {i}, total {dimension} coords: {len(combined[dimension])}"
+                f"After concatenating dataset {i}, total {dimension} coords: {total_coord_count}"
             )
 
         except NoDataFoundError as e:
             logger.warning(f"Skipping dataset {i} as it contains no new data: {e}")
             # Continue to next dataset
             continue
+
+    if len(datasets_to_concat) > 1:
+        combined = xr.concat(datasets_to_concat, dim=dimension)
 
     logger.info(
         f"Concatenation complete. Final dataset has {len(combined[dimension])} "

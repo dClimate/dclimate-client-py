@@ -123,6 +123,7 @@ class IPFSStacIO(pystac.StacIO):
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
         self.gateway_url = gateway_url.rstrip("/")
+        self.session = requests.Session()
 
     def read_text(self, source: str, *args, **kwargs) -> str:
         """
@@ -143,7 +144,7 @@ class IPFSStacIO(pystac.StacIO):
         if source.startswith("ipfs://"):
             cid = source.replace("ipfs://", "")
             url = f"{self.gateway_url}/ipfs/{cid}"
-            response = requests.get(url)
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
             return response.text
 

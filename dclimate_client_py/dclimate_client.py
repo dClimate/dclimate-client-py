@@ -95,6 +95,7 @@ class dClimateClient:
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
         self._stac_catalog: typing.Optional[pystac.Catalog] = None
+        self._stac_catalog_lock = asyncio.Lock()
         self._kubo_cas: typing.Optional[KuboCAS] = None
         # Note: STAC catalog is loaded lazily (only if STAC server fails)
 
@@ -301,7 +302,8 @@ class dClimateClient:
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                final_cid = resolve_cid_from_stac_server(
+                final_cid = await asyncio.to_thread(
+                    resolve_cid_from_stac_server,
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
@@ -315,12 +317,17 @@ class dClimateClient:
         if final_cid is None:
             # Lazy load STAC catalog
             if self._stac_catalog is None:
-                self._stac_catalog = load_stac_catalog(
-                    gateway_url=self._gateway_base_url
-                )
+                async with self._stac_catalog_lock:
+                    if self._stac_catalog is None:
+                        self._stac_catalog = await asyncio.to_thread(
+                            load_stac_catalog,
+                            gateway_url=self._gateway_base_url,
+                        )
 
             if not organization and resolved_collection:
-                available = list_available_datasets(self._stac_catalog)
+                available = await asyncio.to_thread(
+                    list_available_datasets, self._stac_catalog
+                )
                 if resolved_collection not in available:
                     prefixed_matches = [
                         coll_id
@@ -330,7 +337,8 @@ class dClimateClient:
                     if len(prefixed_matches) == 1:
                         resolved_collection = prefixed_matches[0]
 
-            final_cid = resolve_dataset_cid_from_stac(
+            final_cid = await asyncio.to_thread(
+                resolve_dataset_cid_from_stac,
                 catalog=self._stac_catalog,
                 collection=resolved_collection,
                 dataset=dataset,
