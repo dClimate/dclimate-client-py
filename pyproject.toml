@@ -76,6 +76,7 @@ asyncio_default_fixture_loop_scope = "function"
 markers = [
     "ipfs: marks tests requiring a running IPFS daemon and network access",
     "ipfs_rpc: marks tests requiring a writable IPFS RPC endpoint",
+    "stac_pointer: marks tests requiring the dClimate STAC CID endpoint",
     "integration: marks integration tests (often slower, may require external services like IPFS)",
     # Add other custom marks here if you create more
 ]

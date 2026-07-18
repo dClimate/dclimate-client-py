@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import gc
 from datetime import datetime, timezone
 from typing import Any
+from unittest.mock import Mock
 
 import pystac
 import pytest
@@ -442,6 +444,67 @@ def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch)
     assert observed["href"] == "ipfs://bafy-root"
     assert isinstance(observed["stac_io"], stac_catalog.IPFSStacIO)
     assert observed["stac_io"].gateway_url == "https://gateway-a.test"
+
+
+def test_load_stac_catalog_closes_session_when_parsing_fails(monkeypatch):
+    session = Mock()
+    monkeypatch.setattr(stac_catalog.requests, "Session", lambda: session)
+
+    def fail_from_file(cls, href, stac_io=None):
+        raise RuntimeError("invalid catalog")
+
+    monkeypatch.setattr(pystac.Catalog, "from_file", classmethod(fail_from_file))
+
+    with pytest.raises(RuntimeError, match="invalid catalog"):
+        stac_catalog.load_stac_catalog("https://gateway.test", root_cid="bafy-invalid")
+
+    session.close.assert_called_once_with()
+
+
+def test_load_stac_catalog_closes_session_when_catalog_is_released(monkeypatch):
+    session = Mock()
+    monkeypatch.setattr(stac_catalog.requests, "Session", lambda: session)
+    monkeypatch.setattr(
+        pystac.Catalog,
+        "from_file",
+        classmethod(
+            lambda cls, href, stac_io=None: pystac.Catalog(
+                id="root", description="Root"
+            )
+        ),
+    )
+
+    catalog = stac_catalog.load_stac_catalog(
+        "https://gateway.test", root_cid="bafy-root"
+    )
+    session.close.assert_not_called()
+
+    del catalog
+    gc.collect()
+
+    session.close.assert_called_once_with()
+
+
+def test_load_stac_catalog_uses_configured_pointer_endpoint(monkeypatch):
+    response = Mock()
+    response.json.return_value = {"cid": "bafy-configured-root"}
+    monkeypatch.setattr(stac_catalog.requests, "get", Mock(return_value=response))
+    observed = {}
+
+    def from_file(cls, href, stac_io=None):
+        observed["href"] = href
+        return pystac.Catalog(id="root", description="Root")
+
+    monkeypatch.setattr(pystac.Catalog, "from_file", classmethod(from_file))
+
+    stac_catalog.load_stac_catalog(
+        "https://gateway.test", catalog_url="https://control.test/catalog-root"
+    )
+
+    stac_catalog.requests.get.assert_called_once_with(
+        "https://control.test/catalog-root", timeout=30
+    )
+    assert observed["href"] == "ipfs://bafy-configured-root"
 
 
 def test_catalog_lister_uses_dataset_metadata_for_partial_item_properties():

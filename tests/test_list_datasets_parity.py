@@ -41,10 +41,14 @@ from dclimate_client_py.stac_server import (
     list_available_datasets_from_stac_server,
     STAC_SERVER_URL,
 )
-from tests.ipfs_config import IPFS_GATEWAY_URL
+from tests.ipfs_config import IPFS_GATEWAY_URL, STAC_CATALOG_URL
 
 
-pytestmark = [pytest.mark.integration, pytest.mark.ipfs]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.ipfs,
+    pytest.mark.stac_pointer,
+]
 
 
 STAC_URL = os.environ.get("STAC_SERVER_URL", STAC_SERVER_URL)
@@ -71,10 +75,13 @@ def stac_catalog() -> Dict[str, Dict[str, Any]]:
 
 @pytest.fixture(scope="module")
 def ipfs_catalog() -> Dict[str, Dict[str, Any]]:
-    if not _probe(f"{PUBLIC_IPFS_GATEWAY}/stac"):
-        pytest.skip(f"IPFS gateway unreachable at {PUBLIC_IPFS_GATEWAY}")
+    if not _probe(STAC_CATALOG_URL):
+        pytest.skip(f"STAC catalog pointer unreachable at {STAC_CATALOG_URL}")
     try:
-        catalog = load_stac_catalog(gateway_url=PUBLIC_IPFS_GATEWAY)
+        catalog = load_stac_catalog(
+            gateway_url=PUBLIC_IPFS_GATEWAY,
+            catalog_url=STAC_CATALOG_URL,
+        )
     except Exception as exc:  # noqa: BLE001 — surface any pystac/network error as a skip
         pytest.skip(f"IPFS catalog load failed: {exc}")
     return list_available_datasets(catalog)

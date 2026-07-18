@@ -10,7 +10,7 @@ import requests  # Import requests here for the check
 import zarr
 import zarr.storage
 
-from tests.ipfs_config import IPFS_GATEWAY_URL, IPFS_RPC_URL
+from tests.ipfs_config import IPFS_GATEWAY_URL, IPFS_RPC_URL, STAC_CATALOG_URL
 
 
 def pytest_addoption(parser):
@@ -32,6 +32,9 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "ipfs_rpc: mark test as requiring a writable IPFS RPC endpoint"
     )
+    config.addinivalue_line(
+        "markers", "stac_pointer: mark test as requiring the STAC CID endpoint"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -50,6 +53,12 @@ def pytest_collection_modifyitems(config, items):
         skip_ipfs_rpc = pytest.mark.skip(
             reason=f"IPFS RPC endpoint not responding at {IPFS_RPC_URL}"
         )
+    stac_pointer_items = [item for item in items if "stac_pointer" in item.keywords]
+    skip_stac_pointer = None
+    if stac_pointer_items and not is_stac_pointer_running(STAC_CATALOG_URL):
+        skip_stac_pointer = pytest.mark.skip(
+            reason=f"STAC catalog pointer not responding at {STAC_CATALOG_URL}"
+        )
 
     for item in items:
         if "integration" in item.keywords and not config.getoption("--run-integration"):
@@ -58,6 +67,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip_ipfs)
         if "ipfs_rpc" in item.keywords and skip_ipfs_rpc is not None:
             item.add_marker(skip_ipfs_rpc)
+        if "stac_pointer" in item.keywords and skip_stac_pointer is not None:
+            item.add_marker(skip_stac_pointer)
 
 
 HERE = pathlib.Path(__file__).parent
@@ -192,6 +203,17 @@ def is_ipfs_rpc_running(rpc_url: str) -> bool:
         response.raise_for_status()
         payload = response.json()
         return isinstance(payload, dict) and bool(payload.get("ID"))
+    except (requests.exceptions.RequestException, ValueError):
+        return False
+
+
+def is_stac_pointer_running(catalog_url: str) -> bool:
+    """Check whether the STAC pointer returns a non-empty root CID."""
+    try:
+        response = requests.get(catalog_url, timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        return isinstance(payload, dict) and bool(payload.get("cid"))
     except (requests.exceptions.RequestException, ValueError):
         return False
 

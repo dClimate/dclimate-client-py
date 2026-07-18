@@ -146,3 +146,32 @@ def test_ipfs_rpc_probe_requires_successful_kubo_identity(
     )
 
     assert suite_conftest.is_ipfs_rpc_running("https://rpc.example") is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"cid": "bafy-root"}, True),
+        (200, {}, False),
+        (404, {}, False),
+        (200, ValueError("invalid JSON"), False),
+    ],
+)
+def test_stac_pointer_probe_requires_successful_root_cid(
+    monkeypatch, status, payload, expected
+):
+    class Response:
+        def raise_for_status(self):
+            if status >= 400:
+                raise suite_conftest.requests.HTTPError(f"HTTP {status}")
+
+        def json(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    monkeypatch.setattr(
+        suite_conftest.requests, "get", lambda *args, **kwargs: Response()
+    )
+
+    assert suite_conftest.is_stac_pointer_running("https://catalog.example") is expected

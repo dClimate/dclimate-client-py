@@ -7,6 +7,7 @@ for discovering and accessing dClimate datasets stored on IPFS.
 
 from typing import Optional, Dict, List, Set, Tuple, Any
 import logging
+import weakref
 import requests
 import pystac
 
@@ -17,13 +18,17 @@ from .stac_server import (
 )
 
 logger = logging.getLogger(__name__)
+STAC_CATALOG_URL = "https://ipfs-gateway.dclimate.net/stac"
 
 
-def get_root_catalog_cid() -> str:
+def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
     """
     Get the root STAC catalog CID.
 
     Fetches the latest catalog CID from the dClimate IPFS gateway API.
+
+    Args:
+        catalog_url: URL of the dClimate STAC root-CID pointer endpoint.
 
     Returns:
         str: The IPFS CID of the root STAC catalog
@@ -32,8 +37,7 @@ def get_root_catalog_cid() -> str:
         requests.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
-    url = "https://ipfs-gateway.dclimate.net/stac"
-    response = requests.get(url, timeout=30)
+    response = requests.get(catalog_url, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -166,9 +170,15 @@ class IPFSStacIO(pystac.StacIO):
         """
         raise NotImplementedError("Writing to IPFS is not supported via StacIO")
 
+    def close(self) -> None:
+        """Close the pooled HTTP session owned by this I/O handler."""
+        self.session.close()
+
 
 def load_stac_catalog(
-    gateway_url: str, root_cid: Optional[str] = None
+    gateway_url: str,
+    root_cid: Optional[str] = None,
+    catalog_url: str = STAC_CATALOG_URL,
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -176,6 +186,7 @@ def load_stac_catalog(
     Args:
         gateway_url: Base URL of the IPFS HTTP gateway
         root_cid: Optional IPFS CID of the root catalog. If None, fetches via get_root_catalog_cid()
+        catalog_url: Root-CID pointer endpoint used when ``root_cid`` is omitted.
 
     Returns:
         pystac.Catalog: The loaded STAC catalog with all links and references
@@ -185,7 +196,7 @@ def load_stac_catalog(
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:
-        root_cid = get_root_catalog_cid()
+        root_cid = get_root_catalog_cid(catalog_url)
 
     # Bind the I/O handler to this catalog. Avoid pystac's process-global
     # default, because concurrent clients may use different gateways.
@@ -193,7 +204,15 @@ def load_stac_catalog(
 
     # Load the root catalog
     catalog_uri = f"ipfs://{root_cid}"
-    catalog = pystac.Catalog.from_file(catalog_uri, stac_io=stac_io)
+    try:
+        catalog = pystac.Catalog.from_file(catalog_uri, stac_io=stac_io)
+    except BaseException:
+        stac_io.close()
+        raise
+
+    # Keep the pool alive for lazy link resolution, then release it when the
+    # returned catalog is no longer in use.
+    weakref.finalize(catalog, stac_io.close)
 
     return catalog
 
