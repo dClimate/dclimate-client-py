@@ -677,7 +677,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
     { name = "pandas" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "py-hamt", specifier = ">=3.4.1" },
+    { name = "py-hamt", git = "https://github.com/dClimate/py-hamt?branch=review-fixes-integration" },
     { name = "pyarrow" },
     { name = "pycryptodome", specifier = ">=3.21.0" },
     { name = "pystac", specifier = ">=1.10.0" },
@@ -1456,7 +1456,7 @@ wheels = [
 [[package]]
 name = "py-hamt"
 version = "3.4.1"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/dClimate/py-hamt?branch=review-fixes-integration#942580df089be13d6b8b803fc942932d65f2fc7f" }
 dependencies = [
     { name = "dag-cbor" },
     { name = "httpx", extra = ["http2"] },
@@ -1465,10 +1465,6 @@ dependencies = [
     { name = "opentelemetry-api" },
     { name = "pycryptodome" },
     { name = "zarr" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/dd/26a3653588dfe9992d6c25d23aa0e2d38e2db1e026dfd4d7b781412bd846/py_hamt-3.4.1.tar.gz", hash = "sha256:4563bd875dfae95cda4a87a052a7765e485fce5347db0f9d178002a1c1c55442", size = 228893, upload-time = "2026-07-10T17:46:53.195Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/12/eb/3808e239135727accb07eeca9e4c049967e1ca4606838db94afaf38432e0/py_hamt-3.4.1-py3-none-any.whl", hash = "sha256:f5ef312844609ce14c56b32c0fe2fc388a57f1e639406dfb7a2c1aa7acf7c036", size = 59805, upload-time = "2026-07-10T17:46:52.09Z" },
 ]
 
 [[package]]
