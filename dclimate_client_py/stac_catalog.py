@@ -316,7 +316,10 @@ def resolve_dataset_cid_from_stac(
             item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
                 item.id, collection_obj.id, dataset
             )
-        item_variant = property_variant or parsed_variant
+        # A bare item (no variant segment/property) is what the listing APIs
+        # report as the "default" variant — keep resolve symmetric with list
+        # and with the STAC-server resolver.
+        item_variant = property_variant or parsed_variant or "default"
 
         if item_dataset != dataset:
             continue
@@ -465,17 +468,20 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                 try:
                     col_catalog = col_link.resolve_stac_object(root=org_catalog).target
                     if col_catalog is not None:
-                        prefix = f"{collection_id}-"
                         for item in col_catalog.get_items():
-                            item_id = item.id
-                            remainder = (
-                                item_id[len(prefix) :]
-                                if item_id.startswith(prefix)
-                                else item_id
+                            # Shared hyphen-aware parsing; without a dataset
+                            # hint the split is ambiguous for hyphenated
+                            # dataset ids, but this keeps both listers and
+                            # both resolvers on one grammar. Bare items are
+                            # the "default" variant, matching the resolvers.
+                            item_dataset, parsed_variant = (
+                                _dataset_and_variant_from_item_id(
+                                    item.id, collection_id
+                                )
                             )
-                            parts = remainder.split("-")
-                            item_dataset = parts[0] if parts else remainder
-                            item_variant = parts[1] if len(parts) > 1 else ""
+                            if item_dataset is None:
+                                continue
+                            item_variant = parsed_variant or "default"
 
                             cid: Optional[str] = None
                             if "data" in item.assets:

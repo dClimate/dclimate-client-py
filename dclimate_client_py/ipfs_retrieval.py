@@ -5,6 +5,7 @@ This module provides functions for loading Zarr datasets from IPFS using KuboCAS
 """
 
 import logging
+import socket
 import time
 import warnings
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 import aiohttp
 import httpx
 import requests
+import urllib3
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
@@ -139,12 +141,21 @@ def _record_span_error(active_span: Span, exc: Exception) -> None:
 
 
 def _is_connection_error(exc: Exception) -> bool:
-    """Classify gateway and network failures by type, including chained causes."""
+    """Classify gateway and network failures by type, including chained causes.
+
+    Deliberately narrower than ``OSError``: filesystem errors such as
+    ``FileNotFoundError``/``PermissionError`` must not masquerade as gateway
+    failures, or the caller would skip the HAMT fallback for them.
+    """
     connection_error_types = (
-        OSError,
+        ConnectionError,
+        TimeoutError,
+        socket.gaierror,
+        socket.herror,
         requests.exceptions.ConnectionError,
         requests.exceptions.Timeout,
-        httpx.RequestError,
+        urllib3.exceptions.MaxRetryError,
+        httpx.TransportError,
         aiohttp.ClientConnectionError,
         aiohttp.ServerTimeoutError,
     )

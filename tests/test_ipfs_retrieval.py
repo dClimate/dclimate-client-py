@@ -3,6 +3,7 @@ import warnings
 import httpx
 import pytest
 import requests
+import urllib3
 import xarray as xr
 
 import dclimate_client_py.dclimate_client as dclimate_client_module
@@ -30,6 +31,11 @@ class DummyGroupedStore:
         return {"1", "0"}
 
 
+def _chained(wrapper: Exception, cause: Exception) -> Exception:
+    wrapper.__cause__ = cause
+    return wrapper
+
+
 @pytest.mark.parametrize(
     "error",
     [
@@ -38,10 +44,28 @@ class DummyGroupedStore:
         requests.ConnectionError("max retries exceeded"),
         requests.Timeout("gateway timed out"),
         httpx.ConnectError("connection refused"),
+        urllib3.exceptions.MaxRetryError(None, "http://gateway", "max retries"),
+        _chained(RuntimeError("wrapped"), httpx.ReadTimeout("gateway timed out")),
     ],
 )
 def test_is_connection_error_classifies_gateway_failures(error):
     assert ipfs_retrieval._is_connection_error(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("no such shard file"),
+        PermissionError("permission denied"),
+        IsADirectoryError("is a directory"),
+        ValueError("not a sharded zarr store"),
+        _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
+    ],
+)
+def test_is_connection_error_rejects_non_network_failures(error):
+    # Filesystem/parse errors must not classify as gateway failures, or the
+    # caller would skip the HAMT fallback for them.
+    assert not ipfs_retrieval._is_connection_error(error)
 
 
 @pytest.mark.asyncio

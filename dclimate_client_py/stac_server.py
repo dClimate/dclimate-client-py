@@ -143,7 +143,16 @@ def _search_pages(
         if method not in {"GET", "POST"}:
             return
         linked_body = next_link.get("body")
-        request_body = linked_body if isinstance(linked_body, dict) else None
+        if isinstance(linked_body, dict):
+            # STAC API next-link contract: with "merge": true the linked
+            # body extends the original request (keeping filters like
+            # "collections"); otherwise it replaces it wholesale.
+            if next_link.get("merge"):
+                request_body = {**body, **linked_body}
+            else:
+                request_body = linked_body
+        else:
+            request_body = None
 
 
 def resolve_cid_from_stac_server(

@@ -159,3 +159,76 @@ def test_non_network_timeout_text_is_not_a_connection_error():
     )
 
     assert not ipfs_retrieval._is_connection_error(error)
+
+
+def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
+    # A bare item (no variant segment, no properties) is reported by the
+    # listing APIs as variant "default"; BOTH resolvers must accept that
+    # name so server->catalog fallback returns the same result.
+    cid = "bafy-bare-default"
+    feature = {
+        "id": "chirps-temp",
+        "collection": "chirps",
+        "assets": {"data": {"href": f"ipfs://{cid}"}},
+    }
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response({"features": [feature]}),
+    )
+
+    item = pystac.Item(
+        id="chirps-temp",
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={},
+    )
+    item.add_asset("data", pystac.Asset(href=f"ipfs://{cid}"))
+    catalog = _catalog_with_item(item)
+
+    assert (
+        stac_server.resolve_cid_from_stac_server(
+            collection="chirps",
+            dataset="temp",
+            variant="default",
+            server_url="https://example.test",
+        )
+        == cid
+    )
+    assert (
+        stac_catalog.resolve_dataset_cid_from_stac(
+            catalog,
+            collection="chirps",
+            dataset="temp",
+            variant="default",
+            organization="org",
+        )
+        == cid
+    )
+
+
+def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch):
+    # Same hyphenated grammar, but with no dclimate:* properties at all —
+    # resolution must work from the item id alone given the dataset hint.
+    cid = "bafy-id-only-hyphens"
+    feature = {
+        "id": "chirps-precip-daily-final-p05",
+        "collection": "chirps",
+        "assets": {"data": {"href": f"ipfs://{cid}"}},
+    }
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response({"features": [feature]}),
+    )
+
+    assert (
+        stac_server.resolve_cid_from_stac_server(
+            collection="chirps",
+            dataset="precip-daily",
+            variant="final-p05",
+            server_url="https://example.test",
+        )
+        == cid
+    )
