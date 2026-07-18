@@ -59,6 +59,7 @@ def test_is_connection_error_classifies_gateway_failures(error):
         PermissionError("permission denied"),
         IsADirectoryError("is a directory"),
         ValueError("not a sharded zarr store"),
+        requests.HTTPError("500 Server Error: Internal Server Error"),
         _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
     ],
 )

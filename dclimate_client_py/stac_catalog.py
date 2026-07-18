@@ -346,7 +346,7 @@ def resolve_dataset_cid_from_stac(
                 f"Dataset '{dataset}' not found in collection '{collection_obj.id}'"
             )
         # If multiple variants exist and none specified, pick a sensible default
-        preferred_order = ["default", "final", "finalized", "latest", None]
+        preferred_order = ["default", "final", "finalized", "latest"]
         selected_item = candidates[0][1]
         for preferred in preferred_order:
             for cand_variant, cand_item in candidates:
@@ -475,19 +475,29 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                     col_catalog = col_link.resolve_stac_object(root=org_catalog).target
                     if col_catalog is not None:
                         for item in col_catalog.get_items():
-                            # Shared hyphen-aware parsing; without a dataset
-                            # hint the split is ambiguous for hyphenated
-                            # dataset ids, but this keeps both listers and
-                            # both resolvers on one grammar. Bare items are
-                            # the "default" variant, matching the resolvers.
+                            # Prefer explicit dclimate:* properties (like the
+                            # server lister); fall back to the shared
+                            # hyphen-aware id parsing, which is ambiguous for
+                            # hyphenated dataset ids without a dataset hint.
+                            # Bare items are the "default" variant, matching
+                            # the resolvers.
+                            props = item.properties or {}
+                            property_dataset = props.get("dclimate:dataset_id")
+                            property_variant = props.get("dclimate:variant")
                             item_dataset, parsed_variant = (
                                 _dataset_and_variant_from_item_id(
-                                    item.id, collection_id
+                                    item.id,
+                                    collection_id,
+                                    dataset=property_dataset,
+                                    variant=property_variant,
                                 )
                             )
+                            item_dataset = property_dataset or item_dataset
                             if item_dataset is None:
                                 continue
-                            item_variant = parsed_variant or "default"
+                            item_variant = (
+                                property_variant or parsed_variant or "default"
+                            )
 
                             cid: Optional[str] = None
                             if "data" in item.assets:

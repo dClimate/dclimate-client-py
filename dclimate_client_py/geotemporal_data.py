@@ -126,7 +126,9 @@ class GeotemporalData:
         if self.data_var.isnull().all():
             raise errors.NoDataFoundError("Selection is empty or all NA")
 
-    def forecast(self, forecast_reference_time: datetime.datetime) -> "GeotemporalData":
+    def forecast(
+        self, forecast_reference_time: typing.Union[str, datetime.datetime]
+    ) -> "GeotemporalData":
         """
         Filter a 4D forecast dataset to a 3D dataset ready for analysis
 

@@ -232,3 +232,60 @@ def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch)
         )
         == cid
     )
+
+
+def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
+    # STAC API next-link contract: "merge": true extends the original body.
+    # Dropping the collections filter on page 2 could poison resolution with
+    # foreign-collection items.
+    cid = "bafy-merged-page-two"
+    bodies = []
+
+    def post(url, json=None, timeout=None):
+        bodies.append(json)
+        if len(bodies) == 1:
+            return _Response(
+                {
+                    "features": [
+                        {
+                            "id": "chirps-other",
+                            "collection": "chirps",
+                            "assets": {"data": {"href": "ipfs://bafy-other"}},
+                        }
+                    ],
+                    "links": [
+                        {
+                            "rel": "next",
+                            "href": "https://example.test/search",
+                            "method": "POST",
+                            "merge": True,
+                            "body": {"token": "page-2"},
+                        }
+                    ],
+                }
+            )
+        return _Response(
+            {
+                "features": [
+                    {
+                        "id": "chirps-temp-final",
+                        "collection": "chirps",
+                        "assets": {"data": {"href": f"ipfs://{cid}"}},
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(stac_server.requests, "post", post)
+
+    assert (
+        stac_server.resolve_cid_from_stac_server(
+            collection="chirps",
+            dataset="temp",
+            variant="final",
+            server_url="https://example.test",
+        )
+        == cid
+    )
+    assert bodies[1]["token"] == "page-2"
+    assert bodies[1]["collections"] == ["chirps"]
