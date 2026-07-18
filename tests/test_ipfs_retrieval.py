@@ -62,6 +62,14 @@ def test_is_connection_error_classifies_gateway_failures(error):
             request=httpx.Request("GET", "https://gateway.example"),
             response=httpx.Response(500),
         ),
+        _chained(
+            RuntimeError("retries exhausted on 500s"),
+            httpx.HTTPStatusError(
+                "too many 500 responses",
+                request=httpx.Request("GET", "https://gateway.example"),
+                response=httpx.Response(500),
+            ),
+        ),
         _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
     ],
 )
@@ -99,7 +107,8 @@ async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 
@@ -124,7 +133,8 @@ async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 
@@ -149,7 +159,8 @@ async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch
     async def hamt_build(**kwargs):
         raise AssertionError("HAMT fallback should not be attempted")
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         raise ValueError("explicit Zarr group required")
 
     monkeypatch.setattr(ipfs_retrieval.ShardedZarrStore, "open", sharded_open)
@@ -177,7 +188,7 @@ async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
     monkeypatch.setattr(
         ipfs_retrieval.xr,
         "open_zarr",
-        lambda *, store, group=None: xr.Dataset(),
+        lambda *, store, group=None, decode_timedelta=False: xr.Dataset(),
     )
 
     with warnings.catch_warnings(record=True) as caught_warnings:
@@ -206,7 +217,8 @@ async def test_hamt_fallback_preserves_explicit_zarr_group(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 

@@ -8,7 +8,7 @@ which is faster than traversing the IPFS-hosted catalog structure.
 from collections.abc import Iterator
 from json import dumps
 from threading import Lock
-from typing import Any, Dict, NamedTuple, Optional, Set
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Set
 from urllib.parse import urljoin
 
 import httpx
@@ -77,6 +77,31 @@ def _dataset_id_from_item_id(
     return parsed_dataset
 
 
+def _dataset_and_variant_from_known_datasets(
+    feature_id: str,
+    collection: str,
+    known_datasets: Iterable[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Parse an item id using the longest matching known dataset id.
+
+    Hyphens delimit both dataset ids and variants, so an unhinted id such as
+    ``chirps-precip-daily-final-p05`` is inherently ambiguous. Collection
+    metadata and explicit sibling-item properties provide the missing hint.
+    """
+    candidates = sorted(
+        {value for value in known_datasets if isinstance(value, str) and value},
+        key=len,
+        reverse=True,
+    )
+    for candidate in candidates:
+        parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+            feature_id, collection, dataset=candidate
+        )
+        if parsed_dataset is not None:
+            return parsed_dataset, parsed_variant
+    return _dataset_and_variant_from_item_id(feature_id, collection)
+
+
 def _feature_variant(
     feature: Dict[str, Any], collection: str, dataset: Optional[str] = None
 ) -> Optional[str]:
@@ -95,7 +120,10 @@ def _feature_variant(
 
 
 def _feature_matches_dataset(
-    feature: Dict[str, Any], collection: str, dataset: str
+    feature: Dict[str, Any],
+    collection: str,
+    dataset: str,
+    known_datasets: Iterable[str] = (),
 ) -> bool:
     feature_collection = feature.get("collection")
     if feature_collection and feature_collection != collection:
@@ -118,6 +146,11 @@ def _feature_matches_dataset(
             return parsed_dataset == dataset
         # The id does not encode the property variant (e.g. a bare id with
         # properties variant "default") — fall through to dataset matching.
+    if known_datasets:
+        parsed_dataset, _ = _dataset_and_variant_from_known_datasets(
+            feature_id, collection, known_datasets
+        )
+        return parsed_dataset == dataset
     return _dataset_id_from_item_id(feature_id, collection, dataset) == dataset
 
 
@@ -130,18 +163,33 @@ def _search_pages(
     url = f"{server_url.rstrip('/')}/search"
     method = "POST"
     request_body: Optional[Dict[str, Any]] = body
-    seen: Set[tuple[str, str, str]] = set()
+    request_headers: Dict[str, str] = {}
+    seen: Set[tuple[str, str, str, str]] = set()
 
     for _ in range(_MAX_SEARCH_PAGES):
-        page_key = (method, url, dumps(request_body, sort_keys=True, default=str))
+        page_key = (
+            method,
+            url,
+            dumps(request_body, sort_keys=True, default=str),
+            dumps(request_headers, sort_keys=True, default=str),
+        )
         if page_key in seen:
             return
         seen.add(page_key)
 
         if method == "POST":
-            response = _client().post(url, json=request_body, timeout=timeout)
+            request_kwargs: Dict[str, Any] = {
+                "json": request_body,
+                "timeout": timeout,
+            }
+            if request_headers:
+                request_kwargs["headers"] = request_headers
+            response = _client().post(url, **request_kwargs)
         else:
-            response = _client().get(url, params=request_body or None, timeout=timeout)
+            request_kwargs = {"params": request_body or None, "timeout": timeout}
+            if request_headers:
+                request_kwargs["headers"] = request_headers
+            response = _client().get(url, **request_kwargs)
         response.raise_for_status()
         page = response.json()
         yield page
@@ -163,6 +211,8 @@ def _search_pages(
         method = str(next_link.get("method", "GET")).upper()
         if method not in {"GET", "POST"}:
             return
+        linked_headers = next_link.get("headers")
+        request_headers = linked_headers if isinstance(linked_headers, dict) else {}
         linked_body = next_link.get("body")
         if isinstance(linked_body, dict):
             # STAC API next-link contract: with "merge": true the linked
@@ -172,6 +222,10 @@ def _search_pages(
                 request_body = {**body, **linked_body}
             else:
                 request_body = linked_body
+        elif next_link.get("merge"):
+            # ``merge: true`` without a link body still carries the original
+            # search filters to the next request.
+            request_body = dict(body)
         else:
             request_body = None
 
@@ -214,24 +268,27 @@ def resolve_cid_from_stac_server(
     def _effective_variant(feature: Dict[str, Any]) -> str:
         return _feature_variant(feature, collection, dataset) or "default"
 
-    matches = []
+    features: list[Dict[str, Any]] = []
     for page in _search_pages(server_url, body, timeout=10):
-        # Filter to the exact dataset. A prefix match would conflate datasets such
-        # as precipitation_total and precipitation_total_land.
-        page_matches = [
-            feature
-            for feature in page.get("features", []) or []
-            if _feature_matches_dataset(feature, collection, dataset)
-        ]
-        matches.extend(page_matches)
-        if variant is not None and any(
-            _effective_variant(feature) == variant for feature in page_matches
-        ):
-            break
-        if variant is None and any(
-            _effective_variant(feature) == "default" for feature in page_matches
-        ):
-            break
+        features.extend(page.get("features", []) or [])
+
+    known_datasets = {
+        dataset_id
+        for feature in features
+        if isinstance(feature, dict)
+        for dataset_id in [(feature.get("properties") or {}).get("dclimate:dataset_id")]
+        if isinstance(dataset_id, str) and dataset_id
+    }
+    known_datasets.add(dataset)
+    # Filter to the exact dataset. A prefix match would conflate datasets such
+    # as ``precip`` and a known hyphenated dataset ``precip-daily``.
+    matches = [
+        feature
+        for feature in features
+        if _feature_matches_dataset(
+            feature, collection, dataset, known_datasets=known_datasets
+        )
+    ]
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
@@ -322,13 +379,39 @@ def list_available_datasets_from_stac_server(
             "organization": organization,
             "observations": set(),
             "datasets": {},  # dataset_name -> { variant_name -> variant_entry }
+            "known_datasets": set(),
         }
 
-    search_features = (
+        summaries = coll.get("summaries") or {}
+        declared_datasets = coll.get("dclimate:types") or summaries.get(
+            "dclimate:dataset_id", []
+        )
+        if isinstance(declared_datasets, list):
+            accumulators[coll_id]["known_datasets"].update(
+                value for value in declared_datasets if isinstance(value, str) and value
+            )
+
+    search_features = [
         feature
         for page in _search_pages(server_url, {"limit": 100}, timeout=15)
         for feature in page.get("features", []) or []
-    )
+    ]
+    dataset_hints: Dict[str, Set[str]] = {}
+    for feature in search_features:
+        collection_id = feature.get("collection")
+        props = feature.get("properties") or {}
+        dataset_id = props.get("dclimate:dataset_id")
+        if (
+            isinstance(collection_id, str)
+            and isinstance(dataset_id, str)
+            and dataset_id
+        ):
+            dataset_hints.setdefault(collection_id, set()).add(dataset_id)
+
+    for collection_id, hints in dataset_hints.items():
+        if collection_id in accumulators:
+            accumulators[collection_id]["known_datasets"].update(hints)
+
     for feature in search_features:
         feature_id = feature.get("id", "")
         collection_id = feature.get("collection")
@@ -348,6 +431,7 @@ def list_available_datasets_from_stac_server(
                 "organization": organization,
                 "observations": set(),
                 "datasets": {},
+                "known_datasets": set(dataset_hints.get(collection_id, set())),
             }
             accumulators[collection_id] = entry
 
@@ -358,17 +442,37 @@ def list_available_datasets_from_stac_server(
 
         # Prefer explicit dclimate:* properties; fall back to id-parsing for
         # items that pre-date the property convention.
-        parsed_dataset, parsed_variant = (
-            _dataset_and_variant_from_item_id(feature_id, collection_id)
-            if isinstance(feature_id, str)
-            else (None, None)
-        )
-        dataset_name = props.get("dclimate:dataset_id") or parsed_dataset
+        property_dataset = props.get("dclimate:dataset_id")
+        property_variant = props.get("dclimate:variant")
+        if not isinstance(feature_id, str):
+            parsed_dataset, parsed_variant = None, None
+        elif property_dataset:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                feature_id, collection_id, dataset=property_dataset
+            )
+        elif property_variant:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                feature_id, collection_id, variant=property_variant
+            )
+            if parsed_dataset is None:
+                parsed_dataset, _ = _dataset_and_variant_from_known_datasets(
+                    feature_id, collection_id, entry["known_datasets"]
+                )
+                parsed_variant = property_variant
+        else:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_known_datasets(
+                feature_id, collection_id, entry["known_datasets"]
+            )
+        dataset_name = property_dataset or parsed_dataset
         variant_name = props.get("dclimate:variant") or parsed_variant or "default"
         if not dataset_name:
             continue
 
         cid = _strip_ipfs_scheme(props.get("dclimate:latest_dataset_cid"))
+        if not cid:
+            cid = _strip_ipfs_scheme(
+                (feature.get("assets") or {}).get("data", {}).get("href")
+            )
 
         variant_entry: Dict[str, Any] = {
             "dataset": dataset_name,

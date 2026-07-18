@@ -221,14 +221,13 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
             }
         ],
     }
+    default_pages = [first_page_with_default, {"features": []}]
     default_page_calls = 0
 
     def post_default_page(url, *, json, timeout):
         nonlocal default_page_calls
         default_page_calls += 1
-        if default_page_calls > 1:
-            raise AssertionError("default on page one should stop pagination")
-        return _Response(first_page_with_default)
+        return _Response(default_pages[default_page_calls - 1])
 
     _install_post(monkeypatch, post_default_page)
     page_one_default = stac_server.resolve_cid_from_stac_server(
@@ -238,7 +237,7 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
     )
     assert _cid(page_one_default) == "bafy-default"
     assert page_one_default.variant == "default"
-    assert default_page_calls == 1
+    assert default_page_calls == 2
 
     pages = [
         {

@@ -10,6 +10,8 @@ import subprocess
 
 import pytest
 
+import tests.conftest as suite_conftest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 META_TEST_ENV = "DCLIMATE_META_TEST"
@@ -57,6 +59,7 @@ def test_offline_unit_tests_run_without_ipfs_gateway():
         "tests/test_siren.py",
         "-q",
     )
+    assert result.returncode == 0, result.stdout
     passed, skipped = _summary_counts(result.stdout)
 
     assert passed > 0 and skipped == 0, (
@@ -82,6 +85,7 @@ def test_unmarked_async_tests_execute(tmp_path):
         str(PROJECT_ROOT / "pyproject.toml"),
         "-q",
     )
+    assert result.returncode == 0, result.stdout
 
     unsupported_message = "async def functions are not natively supported"
     assert unsupported_message not in result.stdout, result.stdout
@@ -113,3 +117,59 @@ def test_debug_tests_contain_a_real_assertion():
     tree = ast.parse(debug_test.read_text(encoding="utf-8"), filename=str(debug_test))
     assertions = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
     assert assertions, "tests/test_debug.py contains no assert statements"
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"ID": "12D3KooWTest"}, True),
+        (200, {}, False),
+        (404, {}, False),
+        (200, ValueError("invalid JSON"), False),
+    ],
+)
+def test_ipfs_rpc_probe_requires_successful_kubo_identity(
+    monkeypatch, status, payload, expected
+):
+    class Response:
+        def raise_for_status(self):
+            if status >= 400:
+                raise suite_conftest.httpx.HTTPError(f"HTTP {status}")
+
+        def json(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    monkeypatch.setattr(
+        suite_conftest.httpx, "post", lambda *args, **kwargs: Response()
+    )
+
+    assert suite_conftest.is_ipfs_rpc_running("https://rpc.example") is expected
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"cid": "bafy-root"}, True),
+        (200, {}, False),
+        (404, {}, False),
+        (200, ValueError("invalid JSON"), False),
+    ],
+)
+def test_stac_pointer_probe_requires_successful_root_cid(
+    monkeypatch, status, payload, expected
+):
+    class Response:
+        def raise_for_status(self):
+            if status >= 400:
+                raise suite_conftest.httpx.HTTPError(f"HTTP {status}")
+
+        def json(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    monkeypatch.setattr(suite_conftest.httpx, "get", lambda *args, **kwargs: Response())
+
+    assert suite_conftest.is_stac_pointer_running("https://catalog.example") is expected

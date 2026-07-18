@@ -163,6 +163,7 @@ class dClimateClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Clean up KuboCAS when exiting async context."""
+        incoming_cancellation = isinstance(exc_val, asyncio.CancelledError)
         siren_error: BaseException | None = None
         try:
             if self._siren_client is not None:
@@ -174,6 +175,16 @@ class dClimateClient:
             if self._kubo_cas is not None:
                 await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
         except BaseException as kubo_error:
+            if incoming_cancellation and not isinstance(
+                kubo_error, asyncio.CancelledError
+            ):
+                # Preserve cancellation from the context body. An ordinary
+                # cleanup failure must not replace task cancellation, but
+                # remains inspectable through the exception context chain.
+                if siren_error is not None:
+                    kubo_error.__context__ = siren_error
+                exc_val.__context__ = kubo_error
+                return False
             if siren_error is None:
                 raise
             # Both cleanups failed. Follow the AsyncExitStack convention (the
@@ -189,7 +200,14 @@ class dClimateClient:
             self._kubo_cas = None
 
         if siren_error is not None:
-            raise siren_error
+            if incoming_cancellation and not isinstance(
+                siren_error, asyncio.CancelledError
+            ):
+                exc_val.__context__ = siren_error
+            else:
+                raise siren_error
+
+        return False
 
     @staticmethod
     def _apply_zarr_group_metadata(ds: xr.Dataset, metadata: DatasetMetadata) -> None:

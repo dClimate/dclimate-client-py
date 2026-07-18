@@ -108,6 +108,24 @@ def test_polygons_does_not_mutate_caller_dataset():
     xr.testing.assert_identical(dataset, original)
 
 
+def test_projected_small_polygon_fallback_uses_wgs84_coordinates():
+    dataset = xr.Dataset(
+        {"temperature": (("latitude", "longitude"), [[1.0, 2.0], [3.0, 4.0]])},
+        coords={"latitude": [34.0, 36.0], "longitude": [-121.0, -119.0]},
+        attrs={"spatial resolution": 1.0},
+    )
+    projected_mask = gpd.GeoSeries(
+        [box(-119.85, 35.15, -119.75, 35.25)], crs=4326
+    ).to_crs(3857)
+
+    result = GeotemporalData(dataset, "temperature").polygons(
+        projected_mask.array, epsg_crs=3857
+    )
+
+    assert float(result.data.longitude) == -119.0
+    assert float(result.data.latitude) == 36.0
+
+
 def test_rolling_aggregation_preserves_time_with_all_nan_spatial_cell():
     times = np.arange(
         np.datetime64("2024-01-01"),

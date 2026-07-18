@@ -48,7 +48,7 @@ def test_package_sources_do_not_import_requests_or_urllib3() -> None:
             offenders.append(str(source_path.relative_to(REPO_ROOT)))
 
     assert not offenders, (
-        "package sources still import requests/urllib3:\n" + "\n".join(offenders)
+        "package sources still use legacy HTTP packages:\n" + "\n".join(offenders)
     )
 
 
@@ -83,14 +83,13 @@ async def test_load_dataset_falls_back_when_stac_transport_is_unreachable(
     monkeypatch.setattr(
         stac_catalog,
         "get_root_catalog_cid",
-        lambda: "bafy-review-root",
+        lambda catalog_url=stac_catalog.STAC_CATALOG_URL: "bafy-review-root",
     )
 
     def fake_from_file(
         cls: type[pystac.Catalog],
         href: str,
-        *args: Any,
-        **kwargs: Any,
+        stac_io: pystac.StacIO | None = None,
     ) -> pystac.Catalog:
         loaded_hrefs.append(href)
         return catalog
@@ -145,7 +144,7 @@ async def test_load_dataset_falls_back_when_stac_transport_is_unreachable(
     assert metadata["cid"] == "bafy-fallback-dataset"
 
 
-def test_ipfs_stac_io_uses_shared_httpx_client() -> None:
+def test_ipfs_stac_io_owns_httpx_client() -> None:
     stac_io = IPFSStacIO("https://gateway.example")
 
     assert isinstance(getattr(stac_io, "client", None), httpx.Client)

@@ -8,15 +8,21 @@ for discovering and accessing dClimate datasets stored on IPFS.
 from os import PathLike
 from typing import Optional, Dict, List, Set, Tuple, Any, cast
 import logging
+import weakref
 from threading import Lock
 
 import httpx
 import pystac
 
 from .datasets import SpatialExtent, TemporalExtent
-from .stac_server import ResolvedDataset, _dataset_and_variant_from_item_id
+from .stac_server import (
+    ResolvedDataset,
+    _dataset_and_variant_from_item_id,
+    _dataset_and_variant_from_known_datasets,
+)
 
 logger = logging.getLogger(__name__)
+STAC_CATALOG_URL = "https://ipfs-gateway.dclimate.net/stac"
 _HTTP_CLIENT: httpx.Client | None = None
 _HTTP_CLIENT_LOCK = Lock()
 
@@ -31,11 +37,14 @@ def _client() -> httpx.Client:
     return _HTTP_CLIENT
 
 
-def get_root_catalog_cid() -> str:
+def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
     """
     Get the root STAC catalog CID.
 
     Fetches the latest catalog CID from the dClimate IPFS gateway API.
+
+    Args:
+        catalog_url: URL of the dClimate STAC root-CID pointer endpoint.
 
     Returns:
         str: The IPFS CID of the root STAC catalog
@@ -44,8 +53,7 @@ def get_root_catalog_cid() -> str:
         httpx.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
-    url = "https://ipfs-gateway.dclimate.net/stac"
-    response = _client().get(url, timeout=30)
+    response = _client().get(catalog_url, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -145,7 +153,10 @@ class IPFSStacIO(pystac.StacIO):
         self.gateway_url = gateway_url.rstrip("/")
         # Shared across asyncio.to_thread workers. httpx.Client is thread-safe
         # for concurrent requests and pools connections across gateway reads.
-        self.client = _client()
+        # Per-instance client so each catalog owns its pool lifecycle
+        # (closed via weakref.finalize when the catalog is collected).
+        # httpx.Client is thread-safe across asyncio.to_thread workers.
+        self.client = httpx.Client(timeout=30, follow_redirects=True)
 
     def read_text(self, source: str | PathLike[str], *args, **kwargs) -> str:
         """
@@ -183,9 +194,15 @@ class IPFSStacIO(pystac.StacIO):
         """
         raise NotImplementedError("Writing to IPFS is not supported via StacIO")
 
+    def close(self) -> None:
+        """Close the pooled HTTP client owned by this I/O handler."""
+        self.client.close()
+
 
 def load_stac_catalog(
-    gateway_url: str, root_cid: Optional[str] = None
+    gateway_url: str,
+    root_cid: Optional[str] = None,
+    catalog_url: str = STAC_CATALOG_URL,
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -193,6 +210,7 @@ def load_stac_catalog(
     Args:
         gateway_url: Base URL of the IPFS HTTP gateway
         root_cid: Optional IPFS CID of the root catalog. If None, fetches via get_root_catalog_cid()
+        catalog_url: Root-CID pointer endpoint used when ``root_cid`` is omitted.
 
     Returns:
         pystac.Catalog: The loaded STAC catalog with all links and references
@@ -202,18 +220,23 @@ def load_stac_catalog(
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:
-        root_cid = get_root_catalog_cid()
+        root_cid = get_root_catalog_cid(catalog_url)
 
-    # Set up custom IPFS I/O handler. NOTE: set_default mutates process-global
-    # pystac state; concurrent loads with different gateway URLs race on it.
-    # The catalog itself binds stac_io at from_file time, which limits the
-    # blast radius to lazily-resolved links of other concurrently-built roots.
+    # Bind the I/O handler to this catalog. Avoid pystac's process-global
+    # default, because concurrent clients may use different gateways.
     stac_io = IPFSStacIO(gateway_url)
-    pystac.StacIO.set_default(lambda: stac_io)
 
     # Load the root catalog
     catalog_uri = f"ipfs://{root_cid}"
-    catalog = pystac.Catalog.from_file(catalog_uri)
+    try:
+        catalog = pystac.Catalog.from_file(catalog_uri, stac_io=stac_io)
+    except BaseException:
+        stac_io.close()
+        raise
+
+    # Keep the pool alive for lazy link resolution, then release it when the
+    # returned catalog is no longer in use.
+    weakref.finalize(catalog, stac_io.close)
 
     return catalog
 
@@ -270,11 +293,19 @@ def resolve_dataset_cid_from_stac(
         )
         if collection_obj is None and resolved_collection_id != collection:
             collection_obj, _ = _resolve_child_by_dclimate_id(org_catalog, collection)
+            if collection_obj is not None:
+                resolved_collection_id = collection
         if collection_obj is None:
             raise ValueError(
                 f"Collection '{collection}' not found under organization '{organization}'"
             )
     else:
+        for candidate_link in catalog.get_child_links():
+            if resolved_collection_id in _extract_collections_from_org_link(
+                candidate_link
+            ):
+                org_link = candidate_link
+                break
         # First, try legacy layout where collections hang off the root catalog
         collection_obj, _ = _resolve_child_by_collection_slug(
             catalog, resolved_collection_id
@@ -290,10 +321,27 @@ def resolve_dataset_cid_from_stac(
             )
 
     # Find the item matching dataset and variant
+    items = list(collection_obj.get_items())
+    known_datasets = {
+        value
+        for value in collection_obj.extra_fields.get("dclimate:types", []) or []
+        if isinstance(value, str) and value
+    }
+    if org_link is not None:
+        known_datasets.update(
+            _extract_datasets_for_collection(org_link, resolved_collection_id)
+        )
+    known_datasets.update(
+        property_dataset
+        for item in items
+        for property_dataset in [(item.properties or {}).get("dclimate:dataset_id")]
+        if isinstance(property_dataset, str) and property_dataset
+    )
+
     candidates = []
     selected_item = None
     selected_variant = None
-    for item in collection_obj.get_items():
+    for item in items:
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         properties = item.properties or {}
         property_dataset = properties.get("dclimate:dataset_id")
@@ -301,7 +349,7 @@ def resolve_dataset_cid_from_stac(
         if property_dataset:
             item_dataset = property_dataset
             _, parsed_variant = _dataset_and_variant_from_item_id(
-                item.id, collection_obj.id, dataset
+                item.id, collection_obj.id, dataset=property_dataset
             )
         elif property_variant:
             item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
@@ -315,8 +363,8 @@ def resolve_dataset_cid_from_stac(
                     item.id, collection_obj.id, dataset
                 )
         else:
-            item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
-                item.id, collection_obj.id, dataset
+            item_dataset, parsed_variant = _dataset_and_variant_from_known_datasets(
+                item.id, collection_obj.id, known_datasets
             )
         # A bare item (no variant segment/property) is what the listing APIs
         # report as the "default" variant — keep resolve symmetric with list
@@ -478,7 +526,17 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                         col_link.resolve_stac_object(root=org_catalog).target,
                     )
                     if col_catalog is not None:
-                        for item in col_catalog.get_items():
+                        items = list(col_catalog.get_items())
+                        known_datasets = set(types)
+                        known_datasets.update(
+                            property_dataset
+                            for item in items
+                            for property_dataset in [
+                                (item.properties or {}).get("dclimate:dataset_id")
+                            ]
+                            if isinstance(property_dataset, str) and property_dataset
+                        )
+                        for item in items:
                             # Prefer explicit dclimate:* properties (like the
                             # server lister); fall back to the shared
                             # hyphen-aware id parsing, which is ambiguous for
@@ -488,15 +546,38 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                             props = item.properties or {}
                             property_dataset = props.get("dclimate:dataset_id")
                             property_variant = props.get("dclimate:variant")
-                            # Parse the id unhinted and overlay explicit
-                            # dclimate:* properties, exactly like the server
-                            # lister — hint-parsing here would drop items
-                            # whose ids don't encode their properties.
-                            parsed_dataset, parsed_variant = (
-                                _dataset_and_variant_from_item_id(
-                                    item.id, collection_id
+                            if property_dataset:
+                                parsed_dataset, parsed_variant = (
+                                    _dataset_and_variant_from_item_id(
+                                        item.id,
+                                        collection_id,
+                                        dataset=property_dataset,
+                                    )
                                 )
-                            )
+                            elif property_variant:
+                                parsed_dataset, parsed_variant = (
+                                    _dataset_and_variant_from_item_id(
+                                        item.id,
+                                        collection_id,
+                                        variant=property_variant,
+                                    )
+                                )
+                                if parsed_dataset is None:
+                                    parsed_dataset, parsed_variant = (
+                                        _dataset_and_variant_from_known_datasets(
+                                            item.id,
+                                            collection_id,
+                                            known_datasets,
+                                        )
+                                    )
+                            else:
+                                parsed_dataset, parsed_variant = (
+                                    _dataset_and_variant_from_known_datasets(
+                                        item.id,
+                                        collection_id,
+                                        known_datasets,
+                                    )
+                                )
                             item_dataset = property_dataset or parsed_dataset
                             if item_dataset is None:
                                 continue
@@ -525,6 +606,8 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                             if temporal:
                                 variant_entry["temporal_extent"] = temporal
                             entry["variants"].append(variant_entry)
+                            known_datasets.add(item_dataset)
+                        entry["types"] = sorted(known_datasets)
                 except Exception:
                     logger.debug(
                         "Could not resolve items for collection %s",

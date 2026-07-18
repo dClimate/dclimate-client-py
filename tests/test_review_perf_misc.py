@@ -227,3 +227,18 @@ def test_points_rejects_missing_geometries(dataset):
 
     with pytest.raises(errors.InvalidSelectionError, match="missing geometries"):
         data.points(mask, epsg_crs=4326)
+
+
+@pytest.mark.parametrize(
+    ("point_kind", "message"),
+    [("empty", "empty geometries"), ("nan", "non-finite coordinates")],
+)
+def test_points_rejects_empty_and_non_finite_geometries(dataset, point_kind, message):
+    from dclimate_client_py import dclimate_zarr_errors as errors
+
+    point = Point() if point_kind == "empty" else Point(float("nan"), 0.0)
+    mask = gpd.GeoSeries([point], crs=4326).array
+    data = GeotemporalData(dataset, "invalid-geometry")
+
+    with pytest.raises(errors.InvalidSelectionError, match=message):
+        data.points(mask, epsg_crs=4326)

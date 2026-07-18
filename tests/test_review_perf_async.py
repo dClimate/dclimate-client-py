@@ -69,18 +69,33 @@ async def test_load_dataset_does_not_stall_event_loop(monkeypatch, install_httpx
     assert max_tick_gap < 0.15, f"event loop stalled for {max_tick_gap:.3f}s"
 
 
-def test_ipfs_stac_io_reuses_client(install_httpx_mock):
+def test_ipfs_stac_io_reuses_client(monkeypatch):
     get_calls: list[str] = []
+    clients: list[httpx.Client] = []
+    httpx_client = httpx.Client
 
     def handler(request: httpx.Request) -> httpx.Response:
         get_calls.append(str(request.url))
         return httpx.Response(200, text="{}", request=request)
 
-    pooled_client = install_httpx_mock(stac_catalog, handler)
+    def client_factory(*args, **kwargs):
+        client = httpx_client(
+            *args,
+            **kwargs,
+            transport=httpx.MockTransport(handler),
+        )
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(stac_catalog.httpx, "Client", client_factory)
 
     stac_io = stac_catalog.IPFSStacIO("https://gateway.invalid")
-    for index in range(5):
-        assert stac_io.read_text(f"ipfs://fake-cid-{index}") == "{}"
+    try:
+        for index in range(5):
+            assert stac_io.read_text(f"ipfs://fake-cid-{index}") == "{}"
+    finally:
+        stac_io.close()
 
-    assert stac_io.client is pooled_client
+    assert len(clients) == 1
+    assert stac_io.client is clients[0]
     assert len(get_calls) == 5

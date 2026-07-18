@@ -25,11 +25,14 @@ class TestS3Retrieval:
             s3Map_mock = mocker.patch("dclimate_client_py.s3_retrieval.S3Map")
 
             mock_dataset = namedtuple("Dataset", ["update_in_progress"])(False)
-            mocker.patch("xarray.open_zarr", return_value=mock_dataset)
+            open_zarr = mocker.patch("xarray.open_zarr", return_value=mock_dataset)
 
             ds = s3_retrieval.get_dataset_from_s3(dataset_name, bucket_name)
 
             assert ds is mock_dataset
+            open_zarr.assert_called_once_with(
+                s3Map_mock.return_value, chunks=None, decode_timedelta=True
+            )
             s3Map_mock.assert_called_with(
                 f"s3://{bucket_name}/datasets/{dataset_name}.zarr",
                 s3=fake_s3fs,

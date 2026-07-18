@@ -23,7 +23,7 @@ async def test_alist_datasets_uses_public_gateway_when_gateway_is_none(
     monkeypatch.setattr(
         stac_catalog,
         "get_root_catalog_cid",
-        lambda: "bafy-review-root",
+        lambda catalog_url=stac_catalog.STAC_CATALOG_URL: "bafy-review-root",
     )
 
     def fake_from_file(
