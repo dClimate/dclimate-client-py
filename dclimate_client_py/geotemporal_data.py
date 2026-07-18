@@ -338,6 +338,13 @@ class GeotemporalData:
         GeotemporalData
             New dataset
         """
+        try:
+            import rioxarray
+        except ImportError as exc:
+            raise ImportError(
+                "GeotemporalData.polygons() requires rioxarray to be installed"
+            ) from exc
+
         # If the polygon(s) are collectively smaller than the size of one grid cell,
         # clipping will return no data In this case return data from the grid cell nearest
         # to the center of the polygon
@@ -345,18 +352,20 @@ class GeotemporalData:
             return self.reduce_polygon_to_point(polygons_mask)
 
         # return clipped data as normal if the polygons are large enough
-        self.data.rio.set_spatial_dims(
-            x_dim="longitude", y_dim="latitude", inplace=True
+        spatial_data = self.data.rio.set_spatial_dims(
+            x_dim="longitude", y_dim="latitude"
         )
-        self.data.rio.write_crs("epsg:4326", inplace=True)
+        spatial_data = spatial_data.rio.write_crs("epsg:4326")
         mask = gpd.geoseries.GeoSeries(polygons_mask).set_crs(epsg_crs).to_crs(4326)
         min_lon, min_lat, max_lon, max_lat = mask.total_bounds
-        box_ds = self.rectangle(min_lat, min_lon, max_lat, max_lon).data
+        box_ds = self._new(spatial_data).rectangle(
+            min_lat, min_lon, max_lat, max_lon
+        ).data
         self._new(box_ds).check_dataset_size(point_limit=point_limit)
         try:
             shaped_ds = box_ds.rio.clip(mask, 4326, drop=True)
-        except errors.NoDataInBounds:
-            return self.data.reduce_polygon_to_point(polygons_mask)
+        except rioxarray.exceptions.NoDataInBounds:
+            return self.reduce_polygon_to_point(polygons_mask)
 
         data_var = list(shaped_ds.data_vars)[0]
         if "grid_mapping" in shaped_ds[data_var].attrs:
@@ -563,9 +572,10 @@ class GeotemporalData:
         _check_input_parameters(agg_method=agg_method)
         # Aggregate by the specified method over the specified rolling window length
         rolled = self.data.rolling(time=window_size)
-        rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).dropna("time")
-        # remove NAs at beginning/end of array where window size is not large enough to
-        # compute a value
+        rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).isel(
+            time=slice(window_size - 1, None)
+        )
+        # Remove incomplete leading windows while preserving spatial NAs.
 
         return self._new(rolled_agg)
 
