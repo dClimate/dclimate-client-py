@@ -22,6 +22,23 @@ def _dataset_id_from_item_id(feature_id: str, collection: str) -> Optional[str]:
     return dataset or None
 
 
+def _feature_variant(feature: Dict[str, Any], collection: str) -> Optional[str]:
+    props = feature.get("properties") or {}
+    variant = props.get("dclimate:variant")
+    if variant:
+        return variant
+
+    feature_id = feature.get("id")
+    if not isinstance(feature_id, str):
+        return None
+    prefix = f"{collection}-"
+    remainder = (
+        feature_id[len(prefix) :] if feature_id.startswith(prefix) else feature_id
+    )
+    _, _, variant = remainder.partition("-")
+    return variant or None
+
+
 def _feature_matches_dataset(
     feature: Dict[str, Any], collection: str, dataset: str
 ) -> bool:
@@ -84,7 +101,7 @@ def resolve_cid_from_stac_server(
     # Select by variant or use default preference
     if variant:
         item = next(
-            (f for f in matches if f["properties"].get("dclimate:variant") == variant),
+            (f for f in matches if _feature_variant(f, collection) == variant),
             None,
         )
         if not item:
@@ -99,7 +116,7 @@ def resolve_cid_from_stac_server(
                 (
                     f
                     for f in matches
-                    if f["properties"].get("dclimate:variant") == preferred
+                    if _feature_variant(f, collection) == preferred
                 ),
                 None,
             )

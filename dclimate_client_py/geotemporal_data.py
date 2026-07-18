@@ -105,7 +105,7 @@ class GeotemporalData:
         SelectionTooLargeError
             When dataset size limit is violated
         """
-        num_points = functools.reduce(operator.mul, self.data.sizes.values())
+        num_points = functools.reduce(operator.mul, self.data.sizes.values(), 1)
         if num_points > point_limit:
             raise errors.SelectionTooLargeError(
                 f"Selection of {num_points} data points is more than limit of {point_limit}"
@@ -536,7 +536,7 @@ class GeotemporalData:
                 "day": f"{time_unit}D",
                 "week": f"{time_unit}W",
                 "month": f"{time_unit}ME",
-                "quarter": f"{time_unit}Q",
+                "quarter": f"{time_unit}QE",
                 "year": f"{time_unit}YE",
             }
             # Resample by the specified time period and aggregate by the specified method
@@ -592,10 +592,12 @@ class GeotemporalData:
 
         If no arguments are passed, a bytes object is returned.
         """
+        ds = self.data.copy()
+
         try:
-            if self.data.update_in_progress and not self.data.update_is_append_only:
-                update_date_range = self.data.attrs["update_date_range"]
-                self.data.attrs["updating date range"] = (
+            if ds.update_in_progress and not ds.update_is_append_only:
+                update_date_range = ds.attrs["update_date_range"]
+                ds.attrs["updating date range"] = (
                     f"{update_date_range[0]}-{update_date_range[1]}"
                 )
         except AttributeError:
@@ -609,10 +611,10 @@ class GeotemporalData:
             "finalization date",
             "update_date_range",
         ]:
-            if bad_key in self.data.attrs:
-                del self.data.attrs[bad_key]
+            if bad_key in ds.attrs:
+                del ds.attrs[bad_key]
 
-        return self.data.to_netcdf(*args, **kwargs)
+        return ds.to_netcdf(*args, **kwargs)
 
     def as_dict(self) -> dict:
         """Prepares dict containing metadata and values from dataset

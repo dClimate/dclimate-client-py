@@ -51,12 +51,17 @@ def get_dataset_from_s3(dataset_name: str, bucket_name: str) -> xr.Dataset:
     except FileNotFoundError:
         raise DatasetNotFoundError(f"Invalid dataset name {dataset_name}")
 
-    if ds.update_in_progress:
-        if hasattr(ds, "initial_parse") and ds.initial_parse:
+    attrs = getattr(ds, "attrs", {})
+    if attrs.get(
+        "update_in_progress", getattr(ds, "update_in_progress", False)
+    ):
+        if attrs.get("initial_parse", getattr(ds, "initial_parse", False)):
             raise DatasetNotFoundError(
                 f"Dataset {dataset_name} is undergoing initial parse, retry request later"
             )
-        if ds.update_is_append_only:
+        if attrs.get(
+            "update_is_append_only", getattr(ds, "update_is_append_only", False)
+        ):
             start, end = ds.attrs["date range"][0], ds.attrs["update_previous_end_date"]
         else:
             start, end = ds.attrs["date range"]
