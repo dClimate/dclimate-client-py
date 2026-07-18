@@ -24,6 +24,7 @@ from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
+    ResolvedDataset,
     resolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
 )
@@ -252,10 +253,11 @@ class dClimateClient:
         # Case 1: Direct CID provided - bypass catalog resolution
         if cid:
             slug_collection = resolved_collection or collection or "unknown"
+            direct_variant = variant or "unknown"
             dataset_slug = (
-                f"{organization}/{slug_collection}/{dataset}/{variant or 'default'}"
+                f"{organization}/{slug_collection}/{dataset}/{direct_variant}"
                 if organization
-                else f"{slug_collection}/{dataset}/{variant or 'default'}"
+                else f"{slug_collection}/{dataset}/{direct_variant}"
             )
             ds = await _load_dataset_from_ipfs_cid(
                 ipfs_cid=cid,
@@ -268,7 +270,7 @@ class dClimateClient:
             metadata: DatasetMetadata = {
                 "collection": resolved_collection or "unknown",
                 "dataset": dataset,
-                "variant": variant or "unknown",
+                "variant": direct_variant,
                 "slug": dataset_slug,
                 "cid": cid,
                 "url": None,
@@ -294,12 +296,12 @@ class dClimateClient:
                 "collection parameter is required. Use client.list_datasets() to see available collections."
             )
 
-        final_cid = None
+        resolved: typing.Optional[ResolvedDataset] = None
 
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                final_cid = await asyncio.to_thread(
+                resolved = await asyncio.to_thread(
                     resolve_cid_from_stac_server,
                     collection=resolved_collection,
                     dataset=dataset,
@@ -311,7 +313,7 @@ class dClimateClient:
                 pass
 
         # Fallback: Resolve via STAC catalog from IPFS
-        if final_cid is None:
+        if resolved is None:
             from .stac_catalog import (
                 list_available_datasets,
                 load_stac_catalog,
@@ -340,7 +342,7 @@ class dClimateClient:
                     if len(prefixed_matches) == 1:
                         resolved_collection = prefixed_matches[0]
 
-            final_cid = await asyncio.to_thread(
+            resolved = await asyncio.to_thread(
                 resolve_dataset_cid_from_stac,
                 catalog=self._stac_catalog,
                 collection=resolved_collection,
@@ -350,7 +352,7 @@ class dClimateClient:
             )
 
         ds = await _load_dataset_from_ipfs_cid(
-            ipfs_cid=final_cid,
+            ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
             zarr_group=zarr_group,
             shard_read_mode=shard_read_mode,
@@ -360,13 +362,13 @@ class dClimateClient:
         metadata: DatasetMetadata = {
             "collection": resolved_collection,
             "dataset": dataset,
-            "variant": variant or "default",
+            "variant": resolved.variant,
             "slug": (
-                f"{organization}/{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+                f"{organization}/{resolved_collection or collection}/{dataset}/{resolved.variant}"
                 if organization
-                else f"{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+                else f"{resolved_collection or collection}/{dataset}/{resolved.variant}"
             ),
-            "cid": final_cid,
+            "cid": resolved.cid,
             "url": None,
             "timestamp": None,
             "source": "stac",

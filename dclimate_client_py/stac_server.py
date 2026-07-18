@@ -7,6 +7,7 @@ which is faster than traversing the IPFS-hosted catalog structure.
 
 from collections.abc import Iterator
 from json import dumps
+import typing
 from typing import Any, Dict, Optional, Set
 from urllib.parse import urljoin
 
@@ -18,6 +19,11 @@ STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
 
 _MAX_SEARCH_PAGES = 50
+
+
+class ResolvedDataset(typing.NamedTuple):
+    cid: str
+    variant: str
 
 
 def _dataset_and_variant_from_item_id(
@@ -163,9 +169,11 @@ def resolve_cid_from_stac_server(
     dataset: str,
     variant: Optional[str] = None,
     server_url: str = STAC_SERVER_URL,
-) -> str:
+) -> ResolvedDataset:
     """
     Resolve dataset CID via STAC server /search API.
+
+    Changed in 0.6: returns ResolvedDataset.
 
     Uses the same API format as the frontend (POST /search with collections filter).
 
@@ -176,7 +184,7 @@ def resolve_cid_from_stac_server(
         server_url: STAC server base URL
 
     Returns:
-        str: The IPFS CID of the Zarr dataset (without 'ipfs://' prefix)
+        ResolvedDataset: The IPFS CID and selected variant
 
     Raises:
         ValueError: If dataset or variant is not found
@@ -203,17 +211,19 @@ def resolve_cid_from_stac_server(
             if _feature_matches_dataset(feature, collection, dataset)
         ]
         matches.extend(page_matches)
-        if variant and any(
+        if variant is not None and any(
             _effective_variant(feature) == variant for feature in page_matches
         ):
             break
-        if variant is None and page_matches:
+        if variant is None and any(
+            _effective_variant(feature) == "default" for feature in page_matches
+        ):
             break
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
     # Select by variant or use default preference
-    if variant:
+    if variant is not None:
         item = next(
             (f for f in matches if _effective_variant(f) == variant),
             None,
@@ -235,11 +245,12 @@ def resolve_cid_from_stac_server(
                 break
 
     # Extract CID from asset
+    selected_variant = variant if variant is not None else _effective_variant(item)
     href = item.get("assets", {}).get("data", {}).get("href", "")
     if href.startswith("ipfs://"):
-        return href.replace("ipfs://", "")
+        return ResolvedDataset(href.replace("ipfs://", ""), selected_variant)
     if href:
-        return href
+        return ResolvedDataset(href, selected_variant)
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
 

@@ -9,6 +9,7 @@ import os
 import pytest
 import requests
 from dclimate_client_py.stac_server import (
+    ResolvedDataset,
     resolve_cid_from_stac_server,
     STAC_SERVER_URL,
 )
@@ -101,64 +102,66 @@ class TestStacServerConnection:
 class TestResolveCidFromStacServer:
     """Test the resolve_cid_from_stac_server function."""
 
-    def test_resolve_cid_returns_string(self, stac_server_url, available_dataset):
-        """Test that resolve returns a non-empty string CID."""
-        cid = resolve_cid_from_stac_server(
+    def test_resolve_cid_returns_dataset(self, stac_server_url, available_dataset):
+        """Test that resolve returns a result with a non-empty string CID."""
+        resolved = resolve_cid_from_stac_server(
             collection=available_dataset["collection"],
             dataset=available_dataset["dataset"],
             server_url=stac_server_url,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
+        assert isinstance(resolved, ResolvedDataset)
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
 
     def test_resolve_cid_no_ipfs_prefix(self, stac_server_url, available_dataset):
         """Test that returned CID has no ipfs:// prefix."""
-        cid = resolve_cid_from_stac_server(
+        resolved = resolve_cid_from_stac_server(
             collection=available_dataset["collection"],
             dataset=available_dataset["dataset"],
             server_url=stac_server_url,
         )
 
-        assert not cid.startswith("ipfs://")
+        assert not resolved.cid.startswith("ipfs://")
 
     def test_resolve_cid_valid_format(self, stac_server_url, available_dataset):
         """Test that returned CID has valid IPFS CID format."""
-        cid = resolve_cid_from_stac_server(
+        resolved = resolve_cid_from_stac_server(
             collection=available_dataset["collection"],
             dataset=available_dataset["dataset"],
             server_url=stac_server_url,
         )
 
         # IPFS CIDs typically start with these prefixes
-        assert cid.startswith(("Qm", "bafy", "bafk", "bafz", "bafyr"))
+        assert resolved.cid.startswith(("Qm", "bafy", "bafk", "bafz", "bafyr"))
 
     def test_resolve_cid_with_variant(self, stac_server_url, available_dataset):
         """Test CID resolution with specific variant."""
         if not available_dataset["variant"]:
             pytest.skip("Test dataset has no variant")
 
-        cid = resolve_cid_from_stac_server(
+        resolved = resolve_cid_from_stac_server(
             collection=available_dataset["collection"],
             dataset=available_dataset["dataset"],
             variant=available_dataset["variant"],
             server_url=stac_server_url,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
-        assert not cid.startswith("ipfs://")
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
+        assert not resolved.cid.startswith("ipfs://")
+        assert resolved.variant == available_dataset["variant"]
 
     def test_resolve_cid_without_variant(self, stac_server_url, available_dataset):
         """Test CID resolution without specifying variant."""
-        cid = resolve_cid_from_stac_server(
+        resolved = resolve_cid_from_stac_server(
             collection=available_dataset["collection"],
             dataset=available_dataset["dataset"],
             server_url=stac_server_url,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
 
     def test_resolve_cid_invalid_collection_raises(
         self, stac_server_url, check_stac_server
@@ -270,12 +273,12 @@ class TestMultipleDatasets:
             datasets_seen.add(key)
 
             try:
-                cid = resolve_cid_from_stac_server(
+                resolved = resolve_cid_from_stac_server(
                     collection=collection,
                     dataset=dataset,
                     server_url=stac_server_url,
                 )
-                resolved_cids.append((key, cid))
+                resolved_cids.append((key, resolved))
             except ValueError:
                 continue
 
@@ -284,7 +287,7 @@ class TestMultipleDatasets:
 
         assert len(resolved_cids) >= 1, "Should resolve at least one dataset"
 
-        for key, cid in resolved_cids:
-            assert isinstance(cid, str)
-            assert len(cid) > 0
-            assert not cid.startswith("ipfs://")
+        for key, resolved in resolved_cids:
+            assert isinstance(resolved.cid, str)
+            assert len(resolved.cid) > 0
+            assert not resolved.cid.startswith("ipfs://")

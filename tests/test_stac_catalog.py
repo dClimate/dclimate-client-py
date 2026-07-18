@@ -216,16 +216,16 @@ class TestResolveDatasetCidFromStac:
             pytest.skip("No datasets available in catalog")
 
         # Try to resolve the CID
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog, collection=collection_id, dataset=dataset_type
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
         # Should not have ipfs:// prefix
-        assert not cid.startswith("ipfs://")
+        assert not resolved.cid.startswith("ipfs://")
         # Should be a valid CID format
-        assert cid.startswith(("Qm", "bafy", "bafk", "bafz"))
+        assert resolved.cid.startswith(("Qm", "bafy", "bafk", "bafz"))
 
     def test_resolve_dataset_cid_with_variant(self, loaded_catalog):
         """Test resolving a dataset CID with a specific variant."""
@@ -266,7 +266,7 @@ class TestResolveDatasetCidFromStac:
         item_dataset = parts[1]
         item_variant = parts[2]
 
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog,
             collection=item_collection,
             dataset=item_dataset,
@@ -274,9 +274,9 @@ class TestResolveDatasetCidFromStac:
             organization=organization_id,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
-        assert not cid.startswith("ipfs://")
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
+        assert not resolved.cid.startswith("ipfs://")
 
     def test_resolve_dataset_cid_invalid_collection(self, loaded_catalog):
         """Test that invalid collection raises ValueError."""
@@ -456,11 +456,11 @@ class TestIntegrationEndToEnd:
                 break
 
         if collection_id and dataset_type:
-            cid = stac_catalog.resolve_dataset_cid_from_stac(
+            resolved = stac_catalog.resolve_dataset_cid_from_stac(
                 catalog, collection=collection_id, dataset=dataset_type
             )
-            assert isinstance(cid, str)
-            assert len(cid) > 0
+            assert isinstance(resolved.cid, str)
+            assert len(resolved.cid) > 0
 
     def test_multiple_catalog_loads_work(self):
         """Test that multiple catalog loads don't interfere with each other."""

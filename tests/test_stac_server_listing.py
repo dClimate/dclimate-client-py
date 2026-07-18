@@ -272,14 +272,14 @@ def test_resolve_cid_uses_exact_dataset_id_for_prefix_collisions(monkeypatch):
         },
     )
 
-    cid = resolve_cid_from_stac_server(
+    resolved = resolve_cid_from_stac_server(
         "ecmwf_era5",
         "precipitation_total",
         "finalized",
         "https://example.test",
     )
 
-    assert cid == "bafy-era5-precip-finalized"
+    assert resolved.cid == "bafy-era5-precip-finalized"
 
 
 def test_resolve_cid_rejects_only_prefix_dataset_match(monkeypatch):
@@ -336,14 +336,14 @@ def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
         },
     )
 
-    cid = resolve_cid_from_stac_server(
+    resolved = resolve_cid_from_stac_server(
         "ecmwf_era5",
         "temperature_2m",
         "finalized",
         "https://example.test",
     )
 
-    assert cid == "bafy-era5-t2m"
+    assert resolved.cid == "bafy-era5-t2m"
 
 
 def test_collections_endpoint_error_propagates(monkeypatch):

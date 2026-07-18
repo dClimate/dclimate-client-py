@@ -11,7 +11,7 @@ import requests
 import pystac
 
 from .datasets import SpatialExtent, TemporalExtent
-from .stac_server import _dataset_and_variant_from_item_id
+from .stac_server import ResolvedDataset, _dataset_and_variant_from_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -204,9 +204,11 @@ def resolve_dataset_cid_from_stac(
     dataset: str,
     variant: Optional[str] = None,
     organization: Optional[str] = None,
-) -> str:
+) -> ResolvedDataset:
     """
     Resolve a dataset to its IPFS CID by querying the STAC catalog.
+
+    Changed in 0.6: returns ResolvedDataset.
 
     This function navigates the STAC catalog structure to find the specific dataset variant
     and extracts the Zarr data CID from the STAC Item's assets.
@@ -224,7 +226,7 @@ def resolve_dataset_cid_from_stac(
             catalog metadata.
 
     Returns:
-        str: The IPFS CID of the Zarr dataset (without 'ipfs://' prefix)
+        ResolvedDataset: The IPFS CID and selected variant
 
     Raises:
         ValueError: If collection, dataset, or variant is not found in the catalog
@@ -270,6 +272,7 @@ def resolve_dataset_cid_from_stac(
     # Find the item matching dataset and variant
     candidates = []
     selected_item = None
+    selected_variant = None
     for item in collection_obj.get_items():
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         properties = item.properties or {}
@@ -307,6 +310,7 @@ def resolve_dataset_cid_from_stac(
 
         if variant is not None and item_variant == variant:
             selected_item = item
+            selected_variant = variant
             break
     if variant is not None:
         if not selected_item:
@@ -320,11 +324,12 @@ def resolve_dataset_cid_from_stac(
             )
         # If multiple variants exist and none specified, pick a sensible default
         preferred_order = ["default", "final", "finalized", "latest"]
-        selected_item = candidates[0][1]
+        selected_variant, selected_item = candidates[0]
         for preferred in preferred_order:
             for cand_variant, cand_item in candidates:
                 if cand_variant == preferred:
                     selected_item = cand_item
+                    selected_variant = cand_variant
                     break
             else:
                 continue
@@ -333,8 +338,8 @@ def resolve_dataset_cid_from_stac(
     if "data" in selected_item.assets:
         href = selected_item.assets["data"].href
         if href.startswith("ipfs://"):
-            return href.replace("ipfs://", "")
-        return href
+            href = href.replace("ipfs://", "")
+        return ResolvedDataset(href, selected_variant)
 
     raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")
 

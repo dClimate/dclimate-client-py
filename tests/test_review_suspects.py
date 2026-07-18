@@ -82,7 +82,7 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
             dataset="precip-daily",
             variant="final-p05",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert (
@@ -92,7 +92,7 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
             dataset="precip-daily",
             variant="final-p05",
             organization="org",
-        )
+        ).cid
         == cid
     )
 
@@ -142,14 +142,14 @@ def test_stac_server_follows_next_link_to_resolve_later_item(monkeypatch):
 
     monkeypatch.setattr(stac_server.requests, "post", post)
 
-    cid = stac_server.resolve_cid_from_stac_server(
+    resolved = stac_server.resolve_cid_from_stac_server(
         collection=collection,
         dataset="target",
         variant="finalized",
         server_url="https://example.test",
     )
 
-    assert cid == "bafy-page-two-target"
+    assert resolved.cid == "bafy-page-two-target"
     assert len(calls) == 2
 
 
@@ -193,7 +193,7 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
             dataset="temp",
             variant="default",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert (
@@ -203,7 +203,7 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
             dataset="temp",
             variant="default",
             organization="org",
-        )
+        ).cid
         == cid
     )
 
@@ -229,7 +229,7 @@ def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch)
             dataset="precip-daily",
             variant="final-p05",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
 
@@ -284,7 +284,7 @@ def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
             dataset="temp",
             variant="final",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert bodies[1]["token"] == "page-2"
