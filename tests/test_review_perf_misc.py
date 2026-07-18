@@ -118,7 +118,52 @@ async def test_encryption_codec_only_offloads_large_chunks(
     large_chunk_thread_calls = len(calls) - small_chunk_thread_calls
 
     assert small_chunk_thread_calls == 0
-    assert large_chunk_thread_calls > 0
+    # Encode AND decode must each offload for large chunks.
+    assert large_chunk_thread_calls == 2
+
+
+async def test_encryption_codec_threshold_boundary(
+    monkeypatch, configured_encryption_key
+):
+    # Pin the 128 KiB dispatch boundary itself: a plaintext one byte under
+    # the threshold encodes inline; at the threshold it offloads. (Decode
+    # sizes shift by the 40-byte nonce+tag overhead, so decode of the
+    # just-under payload may legitimately offload — only encode is pinned.)
+    threshold = encryption_codec_module._THREAD_OFFLOAD_THRESHOLD
+    codec = EncryptionCodec(header="boundary-test")
+    real_to_thread = asyncio.to_thread
+    calls = []
+
+    async def recording_to_thread(function, /, *args, **kwargs):
+        calls.append(function.__name__)
+        return await real_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(
+        encryption_codec_module.asyncio,
+        "to_thread",
+        recording_to_thread,
+    )
+
+    class _Spec:
+        class prototype:
+            class buffer:
+                @staticmethod
+                def from_bytes(data):
+                    return _Bytes(data)
+
+    class _Bytes:
+        def __init__(self, data):
+            self._data = data
+
+        def to_bytes(self):
+            return self._data
+
+    under = await codec._encode_single(_Bytes(b"u" * (threshold - 1)), _Spec)
+    assert calls == []
+    assert len(under.to_bytes()) == threshold - 1 + 40
+
+    await codec._encode_single(_Bytes(b"a" * threshold), _Spec)
+    assert calls == ["encrypt"]
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

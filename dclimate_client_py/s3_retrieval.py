@@ -24,6 +24,10 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | {"S3FileSystem", "S3Map"})
+
+
 @lru_cache(maxsize=1)
 def get_aio_session():
     return session.AioSession(profile=os.environ["ZARR_AWS_PROFILE_NAME"])

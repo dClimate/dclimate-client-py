@@ -9,6 +9,9 @@ import asyncio
 import typing
 from collections.abc import Mapping
 
+if typing.TYPE_CHECKING:
+    import pystac
+
 import requests
 import xarray as xr
 from py_hamt import KuboCAS
@@ -88,7 +91,7 @@ class dClimateClient:
         self._gateway_base_url = gateway_base_url
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
-        self._stac_catalog: typing.Any = None
+        self._stac_catalog: typing.Optional["pystac.Catalog"] = None
         self._stac_catalog_lock = asyncio.Lock()
         self._kubo_cas: typing.Optional[KuboCAS] = None
         # Note: STAC catalog is loaded lazily (only if STAC server fails)
