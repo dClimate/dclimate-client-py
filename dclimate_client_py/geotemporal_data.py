@@ -258,7 +258,7 @@ class GeotemporalData:
         lat: float,
         lon: float,
         radius: float,
-    ) -> xr.Dataset:
+    ) -> "GeotemporalData":
         """Reduces dataset to points within radius of given center coordinates
 
         Parameters
@@ -273,7 +273,7 @@ class GeotemporalData:
 
         Returns
         -------
-        GeotempoeralData
+        GeotemporalData
             New dataset
         """
         latitudes = self.data["latitude"]
@@ -633,10 +633,10 @@ class GeotemporalData:
         _check_input_parameters(agg_method=agg_method)
         # Aggregate by the specified method over the specified rolling window length
         rolled = self.data.rolling(time=window_size)
+        # Trim incomplete leading windows while preserving spatial NAs.
         rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).isel(
             time=slice(window_size - 1, None)
         )
-        # Remove incomplete leading windows while preserving spatial NAs.
 
         return self._new(rolled_agg)
 

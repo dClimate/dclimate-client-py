@@ -257,40 +257,6 @@ def resolve_dataset_cid_from_stac(
         collection_obj, _ = _resolve_child_by_collection_slug(
             catalog, resolved_collection_id
         )
-        # # Otherwise, infer the organization by scanning org metadata on the root catalog
-        # if collection_obj is None:
-        #     for candidate_link in catalog.get_child_links():
-        #         print(candidate_link)
-        #         org_id = candidate_link.extra_fields.get("dclimate:id")
-        #         print(f"Organization ID: {org_id}")
-        #         if not org_id:
-        #             continue
-
-        #         declared_collections = _extract_collections_from_org_link(candidate_link)
-        #         dataset_collections = {
-        #             slug.split("/", 1)[0]
-        #             for slug in candidate_link.extra_fields.get("dclimate:datasets", [])
-        #             if isinstance(slug, str) and "/" in slug
-        #         }
-        #         declared_collections.update(dataset_collections)
-
-        #         if resolved_collection_id in declared_collections:
-        #             org_link = candidate_link
-        #             org_catalog = candidate_link.resolve_stac_object(root=catalog).target
-        #             break
-
-        #         prefixed = f"{org_id}_{collection}"
-        #         if prefixed in declared_collections:
-        #             resolved_collection_id = prefixed
-        #             org_link = candidate_link
-        #             org_catalog = candidate_link.resolve_stac_object(root=catalog).target
-        #             break
-
-        # if collection_obj is None and org_catalog:
-        #     collection_obj, _ = _resolve_child_by_dclimate_id(
-        #         org_catalog, resolved_collection_id
-        #     )
-
         if collection_obj is None:
             org_msg = (
                 f" under organization '{org_link.extra_fields.get('dclimate:id')}'"
@@ -318,6 +284,13 @@ def resolve_dataset_cid_from_stac(
             item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
                 item.id, collection_obj.id, variant=property_variant
             )
+            if item_dataset is None:
+                # The id does not encode the property variant (e.g. a bare
+                # id with properties variant "default") — parse with the
+                # requested-dataset hint instead.
+                item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                    item.id, collection_obj.id, dataset
+                )
         else:
             item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
                 item.id, collection_obj.id, dataset
@@ -484,15 +457,16 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                             props = item.properties or {}
                             property_dataset = props.get("dclimate:dataset_id")
                             property_variant = props.get("dclimate:variant")
-                            item_dataset, parsed_variant = (
+                            # Parse the id unhinted and overlay explicit
+                            # dclimate:* properties, exactly like the server
+                            # lister — hint-parsing here would drop items
+                            # whose ids don't encode their properties.
+                            parsed_dataset, parsed_variant = (
                                 _dataset_and_variant_from_item_id(
-                                    item.id,
-                                    collection_id,
-                                    dataset=property_dataset,
-                                    variant=property_variant,
+                                    item.id, collection_id
                                 )
                             )
-                            item_dataset = property_dataset or item_dataset
+                            item_dataset = property_dataset or parsed_dataset
                             if item_dataset is None:
                                 continue
                             item_variant = (

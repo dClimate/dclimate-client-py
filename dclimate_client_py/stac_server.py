@@ -96,7 +96,10 @@ def _feature_matches_dataset(
         parsed_dataset, _ = _dataset_and_variant_from_item_id(
             feature_id, collection, variant=variant
         )
-        return parsed_dataset == dataset
+        if parsed_dataset is not None:
+            return parsed_dataset == dataset
+        # The id does not encode the property variant (e.g. a bare id with
+        # properties variant "default") — fall through to dataset matching.
     return _dataset_id_from_item_id(feature_id, collection, dataset) == dataset
 
 
