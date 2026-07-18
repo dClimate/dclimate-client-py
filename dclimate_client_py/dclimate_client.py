@@ -12,6 +12,7 @@ from collections.abc import Mapping
 if typing.TYPE_CHECKING:
     import pystac
 
+import httpx
 import requests
 import xarray as xr
 from py_hamt import KuboCAS
@@ -54,6 +55,20 @@ class dClimateClient:
     rpc_base_url : str, optional
         IPFS RPC API base URL (e.g., "http://localhost:5001").
         If None, uses KuboCAS defaults or environment variables.
+    concurrency : int, optional
+        Maximum number of concurrent Kubo gateway requests.
+    headers : dict[str, str], optional
+        Default headers for the internally-created HTTP client.
+    auth : tuple[str, str], optional
+        Authentication tuple (username, password) for the internally-created client.
+    max_retries : int, optional
+        Maximum number of retries for retryable gateway requests.
+    initial_delay : float, optional
+        Initial retry delay in seconds.
+    backoff_factor : float, optional
+        Multiplier used for exponential retry backoff.
+    client_factory : Callable[[], httpx.AsyncClient], optional
+        Create a separate, fully configured HTTP client for each event loop.
 
     Examples
     --------
@@ -90,10 +105,25 @@ class dClimateClient:
         rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
         stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
         siren: typing.Optional[SirenOptions] = None,
-    ):
+        *,
+        concurrency: typing.Optional[int] = None,
+        headers: typing.Optional[dict[str, str]] = None,
+        auth: typing.Optional[tuple[str, str]] = None,
+        max_retries: typing.Optional[int] = None,
+        initial_delay: typing.Optional[float] = None,
+        backoff_factor: typing.Optional[float] = None,
+        client_factory: typing.Optional[typing.Callable[[], httpx.AsyncClient]] = None,
+    ) -> None:
         self._gateway_base_url = gateway_base_url
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
+        self._concurrency = concurrency
+        self._headers = headers
+        self._auth = auth
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+        self._backoff_factor = backoff_factor
+        self._client_factory = client_factory
         self._stac_catalog: typing.Optional["pystac.Catalog"] = None
         self._stac_catalog_lock = asyncio.Lock()
         self._kubo_cas: typing.Optional[KuboCAS] = None
@@ -107,10 +137,27 @@ class dClimateClient:
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
         # Create KuboCAS with configured endpoints
-        self._kubo_cas = KuboCAS(
-            gateway_base_url=self._gateway_base_url,
-            rpc_base_url=self._rpc_base_url,
+        kubo_kwargs: dict[str, typing.Any] = {
+            "gateway_base_url": self._gateway_base_url,
+            "rpc_base_url": self._rpc_base_url,
+        }
+        optional_kubo_kwargs = {
+            "concurrency": self._concurrency,
+            "headers": self._headers,
+            "auth": self._auth,
+            "max_retries": self._max_retries,
+            "initial_delay": self._initial_delay,
+            "backoff_factor": self._backoff_factor,
+            "client_factory": self._client_factory,
+        }
+        kubo_kwargs.update(
+            {
+                key: value
+                for key, value in optional_kubo_kwargs.items()
+                if value is not None
+            }
         )
+        self._kubo_cas = KuboCAS(**kubo_kwargs)
         # Enter the KuboCAS context manager
         await self._kubo_cas.__aenter__()
         return self

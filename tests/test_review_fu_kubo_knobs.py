@@ -13,9 +13,7 @@ import pytest
 from dclimate_client_py.dclimate_client import dClimateClient
 
 
-dclimate_client_module = importlib.import_module(
-    "dclimate_client_py.dclimate_client"
-)
+dclimate_client_module = importlib.import_module("dclimate_client_py.dclimate_client")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 KUBO_OPTION_NAMES = (
     "concurrency",
