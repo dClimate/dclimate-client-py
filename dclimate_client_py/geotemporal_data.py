@@ -272,7 +272,14 @@ class GeotemporalData:
         longitudes = self.data["longitude"]
         data = self.data
 
-        bounds = _circle_bounding_box(lat, lon, radius, latitudes, longitudes)
+        # Pre-crop only for well-behaved grids; exotic layouts (non-index,
+        # non-monotonic, NaN coords, 0-360 longitudes) skip the crop and get
+        # the original full-grid haversine mask below.
+        bounds = None
+        if _sliceable_coordinate(self.data, "latitude") and _sliceable_coordinate(
+            self.data, "longitude"
+        ):
+            bounds = _circle_bounding_box(lat, lon, radius, latitudes, longitudes)
         if bounds is not None:
             min_lat, min_lon, max_lat, max_lon = bounds
             data = data.sel(
@@ -316,7 +323,10 @@ class GeotemporalData:
         Returns
         -------
         GeotemporalData
-            New dataset
+            New dataset. For regular (1-D monotonic) grids this is a
+            zero-copy view of the parent dataset, and integer data
+            variables keep their dtype (the old mask-based selection
+            upcast them to float64).
         """
         try:
             latitudes = self.data[latitude_key]
@@ -325,6 +335,21 @@ class GeotemporalData:
             raise errors.InvalidSelectionError(
                 "Latitude/longitude coordinates were not found in the dataset."
             ) from exc
+
+        if not (
+            _sliceable_coordinate(self.data, latitude_key)
+            and _sliceable_coordinate(self.data, longitude_key)
+        ):
+            # Legacy mask path for exotic layouts: non-index or
+            # non-monotonic coordinates, NaNs, curvilinear grids.
+            data = self.data.where(
+                (latitudes >= min_lat)
+                & (latitudes <= max_lat)
+                & (longitudes >= min_lon)
+                & (longitudes <= max_lon),
+                drop=True,
+            )
+            return self._new(data)
 
         data = self.data.sel(
             {
@@ -916,6 +941,22 @@ def _normalize_time_range_selection(
     return start, end
 
 
+def _sliceable_coordinate(data: xr.Dataset, key: str) -> bool:
+    """True when ``key`` is a 1-D, NaN-free, monotonic dimension index.
+
+    Only such coordinates can be selected with ``.sel(slice)``; anything
+    else (non-index coords, curvilinear grids, unsorted or NaN-holding
+    coords) must go through the mask-based fallback paths.
+    """
+    coord = data[key]
+    if coord.ndim != 1 or coord.dims[0] != key or key not in data.xindexes:
+        return False
+    index = data.indexes[key]
+    if index.hasnans:
+        return False
+    return bool(index.is_monotonic_increasing or index.is_monotonic_decreasing)
+
+
 def _coordinate_slice(
     coordinate: xr.DataArray, minimum: float, maximum: float
 ) -> slice:
@@ -967,7 +1008,7 @@ def _circle_bounding_box(
 
     angular_radius = radius / 6371
     angular_radius_degrees = math.degrees(angular_radius)
-    pad = max(1e-9, angular_radius_degrees * 1e-12)
+    pad = 1e-9  # ~0.1 mm; dwarfs haversine float error (~1e-11 degrees)
     min_lat = max(-90, lat - angular_radius_degrees - pad)
     max_lat = min(90, lat + angular_radius_degrees + pad)
 
