@@ -353,7 +353,7 @@ class GeotemporalData:
 
         # return clipped data as normal if the polygons are large enough
         spatial_data = self.data.rio.set_spatial_dims(
-            x_dim="longitude", y_dim="latitude"
+            x_dim="longitude", y_dim="latitude", inplace=False
         )
         spatial_data = spatial_data.rio.write_crs("epsg:4326")
         mask = gpd.geoseries.GeoSeries(polygons_mask).set_crs(epsg_crs).to_crs(4326)

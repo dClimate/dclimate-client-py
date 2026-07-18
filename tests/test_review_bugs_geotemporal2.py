@@ -2,16 +2,9 @@ import copy
 import warnings
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from dclimate_client_py.geotemporal_data import GeotemporalData
-
-
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these regression tests independent of the local IPFS gateway."""
-    pass
 
 
 def test_check_dataset_size_accepts_scalar_dataset():

@@ -2,15 +2,9 @@ import asyncio
 import time
 from unittest.mock import AsyncMock
 
-import pytest
 import xarray as xr
 
 from dclimate_client_py import dclimate_client, stac_catalog, stac_server
-
-
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these performance tests independent of a local IPFS gateway."""
 
 
 class _Response:

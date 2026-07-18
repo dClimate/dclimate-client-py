@@ -1,16 +1,10 @@
 import importlib
 
 import numpy as np
-import pytest
 import xarray as xr
 
 
 concatenate = importlib.import_module("dclimate_client_py.concatenate")
-
-
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these performance tests independent of a local IPFS gateway."""
 
 
 async def test_concatenate_datasets_uses_single_xarray_concat(monkeypatch):

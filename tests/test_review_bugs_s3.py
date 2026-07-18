@@ -1,13 +1,6 @@
-import pytest
 import xarray as xr
 
 import dclimate_client_py.s3_retrieval as s3_retrieval
-
-
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these regression tests independent of the local IPFS gateway."""
-    pass
 
 
 def test_get_dataset_from_s3_accepts_missing_update_in_progress(monkeypatch):

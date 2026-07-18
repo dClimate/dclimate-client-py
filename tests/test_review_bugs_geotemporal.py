@@ -4,18 +4,10 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-import pytest
 import xarray as xr
 from shapely.geometry import box
 
-from dclimate_client_py import dclimate_zarr_errors as errors
 from dclimate_client_py.geotemporal_data import GeotemporalData
-
-
-@pytest.fixture(scope="session", autouse=True)
-def check_ipfs_connection():
-    """Keep these regression tests independent of the local IPFS gateway."""
-    yield
 
 
 def _polygon_dataset():
@@ -102,16 +94,18 @@ def test_polygons_handles_rioxarray_no_data_in_bounds(monkeypatch):
     xr.testing.assert_identical(result.data, expected.data)
 
 
-def test_polygons_uses_geotemporal_nearest_point_fallback(monkeypatch):
-    no_data_in_bounds = _force_clip_no_data(monkeypatch)
-    monkeypatch.setattr(errors, "NoDataInBounds", no_data_in_bounds, raising=False)
-    geotemporal = GeotemporalData(_polygon_dataset(), "the-dataset-name")
-    mask = _polygon_mask()
-    expected = geotemporal.reduce_polygon_to_point(mask)
+def test_polygons_does_not_mutate_caller_dataset():
+    # The pre-fix implementation attached rio spatial dims / CRS to
+    # self.data with inplace=True, polluting the caller's dataset.
+    dataset = _polygon_dataset()
+    original = dataset.copy(deep=True)
+    geotemporal = GeotemporalData(dataset, "the-dataset-name")
 
-    result = geotemporal.polygons(mask)
+    geotemporal.polygons(_polygon_mask())
 
-    xr.testing.assert_identical(result.data, expected.data)
+    assert "spatial_ref" not in dataset.coords
+    assert dataset.attrs == original.attrs
+    xr.testing.assert_identical(dataset, original)
 
 
 def test_rolling_aggregation_preserves_time_with_all_nan_spatial_cell():

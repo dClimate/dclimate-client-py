@@ -1,14 +1,7 @@
 from typing import Any
 
-import pytest
 
 import dclimate_client_py.stac_server as stac_server
-
-
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these regression tests independent of the local IPFS gateway."""
-    pass
 
 
 class _Response:

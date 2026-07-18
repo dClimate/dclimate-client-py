@@ -16,11 +16,6 @@ from dclimate_client_py.encryption_codec import EncryptionCodec
 from dclimate_client_py.geotemporal_data import GeotemporalData
 
 
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these offline tests independent of a local IPFS gateway."""
-
-
 def test_points_uses_vectorized_coordinate_access(monkeypatch):
     latitudes = np.arange(10, dtype=float)
     longitudes = np.arange(20, 30, dtype=float)

@@ -1,16 +1,9 @@
 import tracemalloc
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from dclimate_client_py.geotemporal_data import GeotemporalData
-
-
-@pytest.fixture(scope="session", autouse=True)
-def check_ipfs_connection():
-    """Keep these regression tests independent of the local IPFS gateway."""
-    yield
 
 
 def _rectangle_dataset():
