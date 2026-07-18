@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import functools
 import math
@@ -6,12 +8,14 @@ import operator
 import typing
 from collections.abc import Mapping
 
-import geopandas as gpd
 import pandas as pd
 import numpy as np
 from shapely.ops import unary_union
 import xarray as xr
 from xarray.core.variable import MissingDimensionsError
+
+if typing.TYPE_CHECKING:
+    import geopandas as gpd
 
 from .dclimate_zarr_errors import (
     InvalidForecastRequestError,
@@ -217,9 +221,11 @@ class GeotemporalData:
         epsg_crs: int,
         snap_to_grid: bool = True,
     ) -> "GeotemporalData":
-        mask = list(gpd.geoseries.GeoSeries(points_mask).set_crs(epsg_crs).to_crs(4326))
-        lats, lons = [point.y for point in mask], [point.x for point in mask]
-        lats, lons = xr.DataArray(lats, dims="point"), xr.DataArray(lons, dims="point")
+        import geopandas as gpd
+
+        series = gpd.GeoSeries(points_mask).set_crs(epsg_crs).to_crs(4326)
+        lats = xr.DataArray(series.y.to_numpy(), dims="point")
+        lons = xr.DataArray(series.x.to_numpy(), dims="point")
 
         if snap_to_grid:
             data = self.data.sel(latitude=lats, longitude=lons, method="nearest")
@@ -364,6 +370,8 @@ class GeotemporalData:
             raise ImportError(
                 "GeotemporalData.polygons() requires rioxarray to be installed"
             ) from exc
+
+        import geopandas as gpd
 
         # If the polygon(s) are collectively smaller than the size of one grid cell,
         # clipping will return no data In this case return data from the grid cell nearest

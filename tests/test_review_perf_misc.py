@@ -65,6 +65,14 @@ def _codec_inputs(payload: bytes):
     return chunk_bytes, chunk_spec
 
 
+@pytest.fixture
+def configured_encryption_key():
+    previous_key = EncryptionCodec._encryption_key
+    EncryptionCodec.set_encryption_key(b"k" * 32)
+    yield
+    EncryptionCodec._encryption_key = previous_key
+
+
 async def _roundtrip(codec: EncryptionCodec, payload: bytes) -> bytes:
     chunk_bytes, chunk_spec = _codec_inputs(payload)
     encoded = await codec._encode_single(chunk_bytes, chunk_spec)
@@ -77,16 +85,16 @@ async def _roundtrip(codec: EncryptionCodec, payload: bytes) -> bytes:
     [(16 * 1024, b"s"), (1024 * 1024, b"L")],
     ids=["small", "large"],
 )
-async def test_encryption_codec_roundtrip(size, fill):
-    EncryptionCodec.set_encryption_key(b"k" * 32)
+async def test_encryption_codec_roundtrip(size, fill, configured_encryption_key):
     codec = EncryptionCodec(header="offline-roundtrip")
     payload = fill * size
 
     assert await _roundtrip(codec, payload) == payload
 
 
-async def test_encryption_codec_only_offloads_large_chunks(monkeypatch):
-    EncryptionCodec.set_encryption_key(b"k" * 32)
+async def test_encryption_codec_only_offloads_large_chunks(
+    monkeypatch, configured_encryption_key
+):
     codec = EncryptionCodec(header="dispatch-test")
     real_to_thread = asyncio.to_thread
     calls = []

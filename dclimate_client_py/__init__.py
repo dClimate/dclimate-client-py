@@ -1,10 +1,6 @@
 # public API
-from .client import (
-    load_s3,
-    geo_temporal_query,
-)
-from .dclimate_client import dClimateClient
-from .geotemporal_data import GeotemporalData
+from importlib import import_module
+
 from .encryption_codec import (
     EncryptionCodec,
 )
@@ -15,10 +11,6 @@ from .datasets import (
     DatasetVariantConfig,
     SpatialExtent,
     TemporalExtent,
-)
-from .stac_catalog import (
-    load_stac_catalog,
-    list_available_datasets,
 )
 from .stac_server import (
     resolve_cid_from_stac_server,
@@ -42,6 +34,26 @@ from .dclimate_zarr_errors import (
     X402PaymentError,
     X402NotInstalledError,
 )
+
+_LAZY_IMPORTS = {
+    "load_s3": (".client", "load_s3"),
+    "geo_temporal_query": (".client", "geo_temporal_query"),
+    "dClimateClient": (".dclimate_client", "dClimateClient"),
+    "GeotemporalData": (".geotemporal_data", "GeotemporalData"),
+    "load_stac_catalog": (".stac_catalog", "load_stac_catalog"),
+    "list_available_datasets": (".stac_catalog", "list_available_datasets"),
+}
+
+
+def __getattr__(name: str):
+    try:
+        module_name, attribute_name = _LAZY_IMPORTS[name]
+    except KeyError:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from None
+
+    value = getattr(import_module(module_name, __name__), attribute_name)
+    globals()[name] = value
+    return value
 
 __all__ = [
     "dClimateClient",

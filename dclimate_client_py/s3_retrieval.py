@@ -1,13 +1,27 @@
+from __future__ import annotations
+
 from aiobotocore import session
 from functools import lru_cache
 import datetime
 import os
-from s3fs import S3FileSystem, S3Map
 import typing
 import json
 import xarray as xr
 
 from dclimate_client_py.dclimate_zarr_errors import DatasetNotFoundError
+
+if typing.TYPE_CHECKING:
+    from s3fs import S3FileSystem
+
+
+def __getattr__(name: str):
+    if name in {"S3FileSystem", "S3Map"}:
+        import s3fs
+
+        value = getattr(s3fs, name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 @lru_cache(maxsize=1)
@@ -21,15 +35,19 @@ def get_s3_fs() -> S3FileSystem:
     Returns:
         S3FileSystem:
     """
+    s3_file_system = globals().get("S3FileSystem")
+    if s3_file_system is None:
+        s3_file_system = __getattr__("S3FileSystem")
+
     if "ZARR_AWS_PROFILE_NAME" in os.environ:
-        return S3FileSystem(session=get_aio_session())
+        return s3_file_system(session=get_aio_session())
     elif "AWS_ACCESS_KEY_ID" in os.environ and "AWS_SECRET_ACCESS_KEY" in os.environ:
-        return S3FileSystem(
+        return s3_file_system(
             key=os.environ["AWS_ACCESS_KEY_ID"],
             secret=os.environ["AWS_SECRET_ACCESS_KEY"],
         )
     else:
-        return S3FileSystem(anon=False)
+        return s3_file_system(anon=False)
 
 
 def get_dataset_from_s3(dataset_name: str, bucket_name: str) -> xr.Dataset:
@@ -43,7 +61,10 @@ def get_dataset_from_s3(dataset_name: str, bucket_name: str) -> xr.Dataset:
         xr.Dataset: dataset corresponding to key
     """
     try:
-        s3_map = S3Map(
+        s3_map_type = globals().get("S3Map")
+        if s3_map_type is None:
+            s3_map_type = __getattr__("S3Map")
+        s3_map = s3_map_type(
             f"s3://{bucket_name}/datasets/{dataset_name}.zarr",
             s3=get_s3_fs(),
         )

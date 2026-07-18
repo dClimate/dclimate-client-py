@@ -12,7 +12,6 @@ from collections.abc import Mapping
 import requests
 import xarray as xr
 from py_hamt import KuboCAS
-import pystac
 
 # Import here to avoid circular imports
 from .ipfs_retrieval import _load_dataset_from_ipfs_cid
@@ -21,11 +20,6 @@ from .ipfs_retrieval import _load_dataset_from_ipfs_cid
 from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
-from .stac_catalog import (
-    load_stac_catalog,
-    resolve_dataset_cid_from_stac,
-    list_available_datasets,
-)
 from .stac_server import (
     resolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
@@ -94,7 +88,7 @@ class dClimateClient:
         self._gateway_base_url = gateway_base_url
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
-        self._stac_catalog: typing.Optional[pystac.Catalog] = None
+        self._stac_catalog: typing.Any = None
         self._stac_catalog_lock = asyncio.Lock()
         self._kubo_cas: typing.Optional[KuboCAS] = None
         # Note: STAC catalog is loaded lazily (only if STAC server fails)
@@ -315,6 +309,12 @@ class dClimateClient:
 
         # Fallback: Resolve via STAC catalog from IPFS
         if final_cid is None:
+            from .stac_catalog import (
+                list_available_datasets,
+                load_stac_catalog,
+                resolve_dataset_cid_from_stac,
+            )
+
             # Lazy load STAC catalog
             if self._stac_catalog is None:
                 async with self._stac_catalog_lock:
@@ -467,6 +467,8 @@ class dClimateClient:
                 pass
 
         # Fallback: walk the IPFS-hosted catalog.
+        from .stac_catalog import load_stac_catalog, list_available_datasets
+
         if self._stac_catalog is None:
             self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
 
