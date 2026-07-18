@@ -262,8 +262,22 @@ class GeotemporalData:
         GeotempoeralData
             New dataset
         """
-        distances = _haversine(lat, lon, self.data["latitude"], self.data["longitude"])
-        data = self.data.where(distances < radius, drop=True)
+        latitudes = self.data["latitude"]
+        longitudes = self.data["longitude"]
+        data = self.data
+
+        bounds = _circle_bounding_box(lat, lon, radius, latitudes, longitudes)
+        if bounds is not None:
+            min_lat, min_lon, max_lat, max_lon = bounds
+            data = data.sel(
+                {
+                    "latitude": _coordinate_slice(latitudes, min_lat, max_lat),
+                    "longitude": _coordinate_slice(longitudes, min_lon, max_lon),
+                }
+            )
+
+        distances = _haversine(lat, lon, data["latitude"], data["longitude"])
+        data = data.where(distances < radius, drop=True)
         return self._new(data)
 
     def rectangle(
@@ -306,13 +320,19 @@ class GeotemporalData:
                 "Latitude/longitude coordinates were not found in the dataset."
             ) from exc
 
-        data = self.data.where(
-            (latitudes >= min_lat)
-            & (latitudes <= max_lat)
-            & (longitudes >= min_lon)
-            & (longitudes <= max_lon),
-            drop=True,
+        data = self.data.sel(
+            {
+                latitude_key: _coordinate_slice(latitudes, min_lat, max_lat),
+                longitude_key: _coordinate_slice(longitudes, min_lon, max_lon),
+            }
         )
+        if data[latitude_key].size == 0 or data[longitude_key].size == 0:
+            data = data.isel(
+                {
+                    latitudes.dims[0]: slice(0, 0),
+                    longitudes.dims[0]: slice(0, 0),
+                }
+            )
         return self._new(data)
 
     def polygons(
@@ -886,6 +906,75 @@ def _normalize_time_range_selection(
             "Time range selection must be [start, end] or {'start': ..., 'end': ...}."
         ) from exc
     return start, end
+
+
+def _coordinate_slice(
+    coordinate: xr.DataArray, minimum: float, maximum: float
+) -> slice:
+    if coordinate.size == 0:
+        return slice(minimum, maximum)
+
+    dimension = coordinate.dims[0]
+    first = coordinate.isel({dimension: 0}).values.item()
+    last = coordinate.isel({dimension: -1}).values.item()
+    if first <= last:
+        return slice(minimum, maximum)
+    return slice(maximum, minimum)
+
+
+def _circle_bounding_box(
+    lat: float,
+    lon: float,
+    radius: float,
+    latitudes: xr.DataArray,
+    longitudes: xr.DataArray,
+) -> typing.Optional[tuple[float, float, float, float]]:
+    values = (lat, lon, radius)
+    if not all(isinstance(value, numbers.Real) for value in values):
+        return None
+    if not all(math.isfinite(value) for value in values) or radius < 0:
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    if latitudes.size == 0 or longitudes.size == 0:
+        return None
+
+    latitude_dimension = latitudes.dims[0]
+    longitude_dimension = longitudes.dims[0]
+    coordinate_endpoints = (
+        latitudes.isel({latitude_dimension: 0}).values.item(),
+        latitudes.isel({latitude_dimension: -1}).values.item(),
+        longitudes.isel({longitude_dimension: 0}).values.item(),
+        longitudes.isel({longitude_dimension: -1}).values.item(),
+    )
+    if not all(
+        isinstance(value, numbers.Real) and math.isfinite(value)
+        for value in coordinate_endpoints
+    ):
+        return None
+    if not all(-90 <= value <= 90 for value in coordinate_endpoints[:2]):
+        return None
+    if not all(-180 <= value <= 180 for value in coordinate_endpoints[2:]):
+        return None
+
+    angular_radius = radius / 6371
+    angular_radius_degrees = math.degrees(angular_radius)
+    pad = max(1e-9, angular_radius_degrees * 1e-12)
+    min_lat = max(-90, lat - angular_radius_degrees - pad)
+    max_lat = min(90, lat + angular_radius_degrees + pad)
+
+    latitude_radians = math.radians(lat)
+    if angular_radius >= math.pi / 2 - abs(latitude_radians):
+        return min_lat, -180, max_lat, 180
+
+    longitude_radius = math.degrees(
+        math.asin(math.sin(angular_radius) / math.cos(latitude_radians))
+    )
+    min_lon = lon - longitude_radius - pad
+    max_lon = lon + longitude_radius + pad
+    if min_lon < -180 or max_lon > 180:
+        return None
+    return min_lat, min_lon, max_lat, max_lon
 
 
 def _haversine(
