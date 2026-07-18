@@ -50,12 +50,13 @@ class dClimateClient:
     ----------
     gateway_base_url : str, optional
         IPFS HTTP Gateway base URL (e.g., "https://ipfs.io" or "http://localhost:8080").
-        If None, uses KuboCAS defaults or environment variables.
+        If None, KuboCAS uses its own defaults while STAC-catalog fallback reads
+        use ``DEFAULT_PUBLIC_GATEWAY``.
     rpc_base_url : str, optional
         IPFS RPC API base URL (e.g., "http://localhost:5001").
         If None, uses KuboCAS defaults or environment variables.
     concurrency : int, optional
-        Maximum number of concurrent Kubo gateway requests.
+        Maximum number of concurrent Kubo gateway and RPC requests.
     headers : dict[str, str], optional
         Default headers for the internally-created HTTP client.
     auth : tuple[str, str], optional
@@ -68,6 +69,7 @@ class dClimateClient:
         Multiplier used for exponential retry backoff.
     client_factory : Callable[[], httpx.AsyncClient], optional
         Create a separate, fully configured HTTP client for each event loop.
+        Cannot be combined with ``headers`` or ``auth``.
 
     Examples
     --------
@@ -101,7 +103,7 @@ class dClimateClient:
     def __init__(
         self,
         gateway_base_url: typing.Optional[str] = DEFAULT_PUBLIC_GATEWAY,
-        rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
+        rpc_base_url: typing.Optional[str] = DEFAULT_PUBLIC_GATEWAY,
         stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
         siren: typing.Optional[SirenOptions] = None,
         *,
@@ -113,7 +115,13 @@ class dClimateClient:
         backoff_factor: typing.Optional[float] = None,
         client_factory: typing.Optional[typing.Callable[[], httpx.AsyncClient]] = None,
     ) -> None:
+        if client_factory is not None and (headers is not None or auth is not None):
+            raise ValueError("client_factory cannot be combined with headers or auth")
+
         self._gateway_base_url = gateway_base_url
+        self._catalog_gateway_base_url = (
+            gateway_base_url if gateway_base_url is not None else DEFAULT_PUBLIC_GATEWAY
+        )
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
         self._concurrency = concurrency
@@ -396,11 +404,7 @@ class dClimateClient:
                     if self._stac_catalog is None:
                         self._stac_catalog = await asyncio.to_thread(
                             load_stac_catalog,
-                            gateway_url=(
-                                self._gateway_base_url
-                                if self._gateway_base_url is not None
-                                else DEFAULT_PUBLIC_GATEWAY
-                            ),
+                            gateway_url=self._catalog_gateway_base_url,
                         )
 
             if not organization and resolved_collection:
@@ -558,11 +562,7 @@ class dClimateClient:
 
         if self._stac_catalog is None:
             self._stac_catalog = load_stac_catalog(
-                gateway_url=(
-                    self._gateway_base_url
-                    if self._gateway_base_url is not None
-                    else DEFAULT_PUBLIC_GATEWAY
-                )
+                gateway_url=self._catalog_gateway_base_url
             )
 
         return list_available_datasets(self._stac_catalog)
@@ -589,11 +589,7 @@ class dClimateClient:
                 if self._stac_catalog is None:
                     self._stac_catalog = await asyncio.to_thread(
                         load_stac_catalog,
-                        gateway_url=(
-                            self._gateway_base_url
-                            if self._gateway_base_url is not None
-                            else DEFAULT_PUBLIC_GATEWAY
-                        ),
+                        gateway_url=self._catalog_gateway_base_url,
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)

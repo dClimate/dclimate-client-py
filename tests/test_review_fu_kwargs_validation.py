@@ -34,6 +34,15 @@ def test_query_rejects_circle_kwargs_missing_lon(
         geotemporal_data.query(circle_kwargs={"lat": 40.0})
 
 
+def test_query_rejects_none_required_circle_value(
+    geotemporal_data: GeotemporalData,
+) -> None:
+    with pytest.raises(errors.InvalidSelectionError, match="lat"):
+        geotemporal_data.query(
+            circle_kwargs={"lat": None, "lon": -74.0, "radius": 10.0}
+        )
+
+
 def test_query_rejects_empty_point_kwargs(
     geotemporal_data: GeotemporalData,
 ) -> None:
@@ -52,6 +61,15 @@ def test_query_rejects_rectangle_kwargs_missing_max_lon(
                 "max_lat": 41.0,
             }
         )
+
+
+@pytest.mark.parametrize("keyword", ["polygon_kwargs", "multiple_points_kwargs"])
+def test_query_rejects_empty_selection_kwargs(
+    geotemporal_data: GeotemporalData,
+    keyword: str,
+) -> None:
+    with pytest.raises(errors.InvalidSelectionError, match=keyword):
+        geotemporal_data.query(**{keyword: {}})
 
 
 def test_query_accepts_complete_circle_kwargs(

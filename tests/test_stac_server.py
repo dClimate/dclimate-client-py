@@ -32,6 +32,7 @@ def check_stac_server(stac_server_url):
             f"{stac_server_url}/search",
             json={"limit": 1},
             timeout=5,
+            follow_redirects=True,
         )
         response.raise_for_status()
     except httpx.HTTPError:
@@ -45,6 +46,7 @@ def available_dataset(stac_server_url, check_stac_server):
         f"{stac_server_url}/search",
         json={"limit": 10},
         timeout=10,
+        follow_redirects=True,
     )
     response.raise_for_status()
     features = response.json().get("features", [])
@@ -91,6 +93,7 @@ class TestStacServerConnection:
             f"{stac_server_url}/search",
             json={"limit": 1},
             timeout=10,
+            follow_redirects=True,
         )
         response.raise_for_status()
         data = response.json()
@@ -239,6 +242,7 @@ class TestMultipleDatasets:
             f"{stac_server_url}/search",
             json={"limit": 50},
             timeout=10,
+            follow_redirects=True,
         )
         response.raise_for_status()
         features = response.json().get("features", [])

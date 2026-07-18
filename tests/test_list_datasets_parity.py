@@ -58,9 +58,14 @@ PUBLIC_IPFS_GATEWAY = IPFS_GATEWAY_URL
 def _probe(url: str, *, post: bool = False, timeout: float = 10.0) -> bool:
     try:
         if post:
-            resp = httpx.post(url, json={"limit": 1}, timeout=timeout)
+            resp = httpx.post(
+                url,
+                json={"limit": 1},
+                timeout=timeout,
+                follow_redirects=True,
+            )
         else:
-            resp = httpx.get(url, timeout=timeout)
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True)
         return resp.is_success
     except httpx.HTTPError:
         return False

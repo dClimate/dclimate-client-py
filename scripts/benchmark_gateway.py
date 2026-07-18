@@ -11,6 +11,7 @@ Benchmark HTTP/2 on and off both before and after that gateway change.
 import argparse
 import json
 import statistics
+import sys
 import time
 from typing import Any
 
@@ -61,6 +62,7 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
             client_factory=lambda: httpx.AsyncClient(
                 http2=args.http2,
                 timeout=60.0,
+                follow_redirects=True,
             ),
         ) as client:
             dataset, _metadata = await client.load_dataset(
@@ -80,11 +82,12 @@ async def _benchmark(args: argparse.Namespace) -> dict[str, Any]:
         bytes_read.append(sample_bytes)
         print(
             f"repetition {repetition}/{args.repetitions}: "
-            f"{elapsed:.3f} s ({sample_bytes} sample bytes)"
+            f"{elapsed:.3f} s ({sample_bytes} sample bytes)",
+            file=sys.stderr,
         )
 
     median = statistics.median(elapsed_times)
-    print(f"median: {median:.3f} s")
+    print(f"median: {median:.3f} s", file=sys.stderr)
     return {
         "http2": args.http2,
         "concurrency": args.concurrency,
@@ -110,8 +113,13 @@ def main() -> None:
 
     import asyncio
 
-    result = asyncio.run(_benchmark(args))
-    print(json.dumps(result, sort_keys=True))
+    try:
+        result = asyncio.run(_benchmark(args))
+    except Exception as exc:  # noqa: BLE001 - CLI failures should be one concise line
+        print(f"failure: {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
+    else:
+        print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -191,7 +191,11 @@ def is_ipfs_running(gateway_url: str) -> bool:
         # Use a known immutable CID (e.g., the empty directory CID)
         # Let's try a known immutable path: "Hello from IPFS Gateway Checker"
         known_cid = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m"  # Example file
-        response = httpx.head(f"{gateway_url.rstrip('/')}/ipfs/{known_cid}", timeout=5)
+        response = httpx.head(
+            f"{gateway_url.rstrip('/')}/ipfs/{known_cid}",
+            timeout=5,
+            follow_redirects=True,
+        )
         # Allow 200 OK or 404 Not Found (if CID isn't locally available but gateway is up)
         # Avoid checking strict 200 as CID might not be pinned locally but gateway is running
         if response.status_code < 500:
@@ -218,7 +222,7 @@ def is_ipfs_running(gateway_url: str) -> bool:
 def is_ipfs_rpc_running(rpc_url: str) -> bool:
     """Check whether the writable Kubo RPC API is responsive."""
     try:
-        response = httpx.post(f"{rpc_url}/api/v0/id", timeout=5)
+        response = httpx.post(f"{rpc_url}/api/v0/id", timeout=5, follow_redirects=True)
         response.raise_for_status()
         payload = response.json()
         return isinstance(payload, dict) and bool(payload.get("ID"))
@@ -229,7 +233,7 @@ def is_ipfs_rpc_running(rpc_url: str) -> bool:
 def is_stac_pointer_running(catalog_url: str) -> bool:
     """Check whether the STAC pointer returns a non-empty root CID."""
     try:
-        response = httpx.get(catalog_url, timeout=5)
+        response = httpx.get(catalog_url, timeout=5, follow_redirects=True)
         response.raise_for_status()
         payload = response.json()
         return isinstance(payload, dict) and bool(payload.get("cid"))

@@ -1,7 +1,19 @@
 import json
 
 import httpx
+import pytest
 import dclimate_client_py.stac_server as stac_server
+
+
+_install_mock_client = None
+
+
+@pytest.fixture(autouse=True)
+def _use_managed_httpx_clients(install_httpx_mock):
+    global _install_mock_client
+    _install_mock_client = install_httpx_mock
+    yield
+    _install_mock_client = None
 
 
 def _mock_search(monkeypatch, features):
@@ -14,8 +26,8 @@ def _mock_search(monkeypatch, features):
         assert set(request.extensions["timeout"].values()) == {10}
         return httpx.Response(200, json={"features": features}, request=request)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(stac_server, "_client", lambda: client)
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
 
 def test_resolve_variant_falls_back_to_variant_encoded_in_item_id(monkeypatch):

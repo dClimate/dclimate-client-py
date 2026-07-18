@@ -362,7 +362,7 @@ def get_root_catalog_cid() -> str
 - `str`: The IPFS CID of the latest root STAC catalog
 
 **Raises:**
-- `requests.HTTPError`: If the API request fails
+- `httpx.HTTPError`: If the API request fails
 - `KeyError`: If response doesn't contain expected 'cid' field
 
 **Example:**

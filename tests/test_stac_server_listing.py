@@ -21,6 +21,17 @@ from dclimate_client_py.stac_server import (
 )
 
 
+_install_mock_client = None
+
+
+@pytest.fixture(autouse=True)
+def _use_managed_httpx_clients(install_httpx_mock):
+    global _install_mock_client
+    _install_mock_client = install_httpx_mock
+    yield
+    _install_mock_client = None
+
+
 def _mock_response(
     request: httpx.Request, payload: Dict[str, Any], status: int = 200
 ) -> httpx.Response:
@@ -40,8 +51,8 @@ def _install_mocks(monkeypatch, *, collections_body, search_body):
         assert request.url.path.endswith("/search"), f"unexpected POST {request.url}"
         return _mock_response(request, search_body)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(stac_server, "_client", lambda: client)
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
 
 SAMPLE_COLLECTIONS = {
@@ -439,8 +450,8 @@ def test_collections_endpoint_error_propagates(monkeypatch):
             return _mock_response(request, {}, status=500)
         return _mock_response(request, {"features": []})
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(stac_server, "_client", lambda: client)
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
     with pytest.raises(httpx.HTTPStatusError):
         list_available_datasets_from_stac_server("https://example.test")

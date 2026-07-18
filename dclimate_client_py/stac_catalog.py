@@ -5,11 +5,12 @@ This module provides integration with STAC (SpatioTemporal Asset Catalog) format
 for discovering and accessing dClimate datasets stored on IPFS.
 """
 
-from os import PathLike
+from os import PathLike, fspath
 from typing import Optional, Dict, List, Set, Tuple, Any, cast
 import logging
 import weakref
 from threading import Lock
+from urllib.parse import urlsplit
 
 import httpx
 import pystac
@@ -151,8 +152,6 @@ class IPFSStacIO(pystac.StacIO):
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
         self.gateway_url = gateway_url.rstrip("/")
-        # Shared across asyncio.to_thread workers. httpx.Client is thread-safe
-        # for concurrent requests and pools connections across gateway reads.
         # Per-instance client so each catalog owns its pool lifecycle
         # (closed via weakref.finalize when the catalog is collected).
         # httpx.Client is thread-safe across asyncio.to_thread workers.
@@ -163,7 +162,7 @@ class IPFSStacIO(pystac.StacIO):
         Read text content from a source URI.
 
         If the source starts with 'ipfs://', resolves it via the HTTP gateway.
-        Otherwise, delegates to the default StacIO implementation.
+        HTTP(S) sources are fetched directly by the owned HTTP client.
 
         Args:
             source: URI to read from (e.g., 'ipfs://bafkrei...' or 'https://...')
@@ -174,7 +173,7 @@ class IPFSStacIO(pystac.StacIO):
         Raises:
             httpx.HTTPError: If the HTTP request fails
         """
-        source_text = cast(str, source)
+        source_text = fspath(source)
         if source_text.startswith("ipfs://"):
             cid = source_text.replace("ipfs://", "")
             url = f"{self.gateway_url}/ipfs/{cid}"
@@ -182,8 +181,16 @@ class IPFSStacIO(pystac.StacIO):
             response.raise_for_status()
             return response.text
 
-        # Fall back to default behavior for HTTP/HTTPS URLs
-        return super().read_text(source, *args, **kwargs)  # type: ignore[safe-super]
+        scheme = urlsplit(source_text).scheme.lower()
+        if scheme in {"http", "https"}:
+            response = self.client.get(source_text)
+            response.raise_for_status()
+            return response.text
+
+        unsupported_scheme = scheme or "<none>"
+        raise ValueError(
+            f"Unsupported STAC source scheme '{unsupported_scheme}': {source_text}"
+        )
 
     def write_text(self, dest: str | PathLike[str], txt: str, *args, **kwargs) -> None:
         """

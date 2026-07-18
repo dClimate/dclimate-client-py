@@ -13,6 +13,17 @@ import pytest
 from dclimate_client_py import ipfs_retrieval, stac_catalog, stac_server
 
 
+_install_mock_client = None
+
+
+@pytest.fixture(autouse=True)
+def _use_managed_httpx_clients(install_httpx_mock):
+    global _install_mock_client
+    _install_mock_client = install_httpx_mock
+    yield
+    _install_mock_client = None
+
+
 class _Response:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
@@ -37,8 +48,8 @@ def _install_post(monkeypatch, post) -> None:
         response = post(str(request.url), **kwargs)
         return httpx.Response(200, json=response._payload, request=request)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(stac_server, "_client", lambda: client)
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
 
 def _catalog_with_item(item: pystac.Item) -> pystac.Catalog:

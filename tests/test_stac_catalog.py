@@ -1,10 +1,11 @@
 """
 Comprehensive tests for STAC catalog integration module.
 
-Tests all functions and classes in stac_catalog.py using real data from the dClimate IPFS gateway.
-No mocking is used - all tests interact with actual STAC catalog data.
+Tests all functions and classes in stac_catalog.py. Integration cases use the
+real dClimate IPFS gateway; isolated protocol cases use httpx MockTransport.
 """
 
+import httpx
 import pytest
 import pystac
 from dclimate_client_py import stac_catalog
@@ -123,6 +124,33 @@ class TestIPFSStacIO:
         content2 = stac_io.read_text(ipfs_uri)
         assert isinstance(content2, str)
         assert content1 == content2
+
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_read_text_fetches_http_urls(self, scheme):
+        requested_url = f"{scheme}://catalog.example/root.json"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == requested_url
+            return httpx.Response(200, text='{"type": "Catalog"}', request=request)
+
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        stac_io.client.close()
+        stac_io.client = httpx.Client(transport=httpx.MockTransport(handler))
+        try:
+            assert stac_io.read_text(requested_url) == '{"type": "Catalog"}'
+        finally:
+            stac_io.close()
+
+    @pytest.mark.parametrize(
+        "source", ["file:///tmp/catalog.json", "s3://bucket/catalog.json"]
+    )
+    def test_read_text_rejects_unsupported_schemes(self, source):
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        try:
+            with pytest.raises(ValueError, match=source.split(":", 1)[0]):
+                stac_io.read_text(source)
+        finally:
+            stac_io.close()
 
     def test_write_text_raises_not_implemented(self):
         """Test that write_text raises NotImplementedError."""

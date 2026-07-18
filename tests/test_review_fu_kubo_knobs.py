@@ -53,6 +53,7 @@ async def test_kubo_connection_options_are_forwarded_exactly(
     async with dClimateClient(
         concurrency=64,
         headers={"Authorization": "Bearer x"},
+        auth=("user", "pass"),
         max_retries=5,
         initial_delay=0.5,
         backoff_factor=3.0,
@@ -65,6 +66,7 @@ async def test_kubo_connection_options_are_forwarded_exactly(
             "rpc_base_url": "https://ipfs-gateway.dclimate.net",
             "concurrency": 64,
             "headers": {"Authorization": "Bearer x"},
+            "auth": ("user", "pass"),
             "max_retries": 5,
             "initial_delay": 0.5,
             "backoff_factor": 3.0,
@@ -111,6 +113,37 @@ async def test_client_factory_is_forwarded_untouched(
             "client_factory": client_factory,
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "conflicting_option",
+    [
+        {"headers": {"Authorization": "Bearer x"}},
+        {"auth": ("user", "pass")},
+    ],
+)
+def test_client_factory_rejects_headers_and_auth_at_construction(
+    conflicting_option: dict[str, Any],
+) -> None:
+    def client_factory() -> object:
+        return object()
+
+    with pytest.raises(ValueError, match="client_factory"):
+        dClimateClient(client_factory=client_factory, **conflicting_option)
+
+
+@pytest.mark.parametrize(
+    "standalone_option",
+    [
+        {"client_factory": lambda: object()},
+        {"headers": {"Authorization": "Bearer x"}},
+        {"auth": ("user", "pass")},
+    ],
+)
+def test_client_factory_headers_and_auth_are_valid_alone(
+    standalone_option: dict[str, Any],
+) -> None:
+    dClimateClient(**standalone_option)
 
 
 def test_gateway_benchmark_script_exposes_tuning_flags() -> None:

@@ -767,7 +767,9 @@ class GeotemporalData:
     ) -> "GeotemporalData":
         if point_kwargs is not None:
             missing = [
-                key for key in ("latitude", "longitude") if key not in point_kwargs
+                key
+                for key in ("latitude", "longitude")
+                if key not in point_kwargs or point_kwargs[key] is None
             ]
             if missing:
                 raise errors.InvalidSelectionError(
@@ -776,11 +778,17 @@ class GeotemporalData:
 
         if circle_kwargs is not None:
             missing = []
-            if "lat" not in circle_kwargs and "center_lat" not in circle_kwargs:
-                missing.append("lat")
-            if "lon" not in circle_kwargs and "center_lon" not in circle_kwargs:
-                missing.append("lon")
-            if "radius" not in circle_kwargs:
+            if "lat" in circle_kwargs:
+                if circle_kwargs["lat"] is None:
+                    missing.append("lat")
+            elif circle_kwargs.get("center_lat") is None:
+                missing.append("center_lat" if "center_lat" in circle_kwargs else "lat")
+            if "lon" in circle_kwargs:
+                if circle_kwargs["lon"] is None:
+                    missing.append("lon")
+            elif circle_kwargs.get("center_lon") is None:
+                missing.append("center_lon" if "center_lon" in circle_kwargs else "lon")
+            if circle_kwargs.get("radius") is None:
                 missing.append("radius")
             if missing:
                 raise errors.InvalidSelectionError(
@@ -791,12 +799,19 @@ class GeotemporalData:
             missing = [
                 key
                 for key in ("min_lat", "min_lon", "max_lat", "max_lon")
-                if key not in rectangle_kwargs
+                if key not in rectangle_kwargs or rectangle_kwargs[key] is None
             ]
             if missing:
                 raise errors.InvalidSelectionError(
                     f"rectangle_kwargs missing required key(s): {', '.join(missing)}"
                 )
+
+        if polygon_kwargs == {}:
+            raise errors.InvalidSelectionError("polygon_kwargs must not be empty")
+        if multiple_points_kwargs == {}:
+            raise errors.InvalidSelectionError(
+                "multiple_points_kwargs must not be empty"
+            )
 
         # Filter data down temporally, then spatially, and check that the size of
         # resulting dataset fits within the limit. While a user can get the entire DS by
