@@ -5,6 +5,7 @@ This module provides a high-level client interface that manages IPFS connections
 internally, abstracting away KuboCAS lifecycle management.
 """
 
+import asyncio
 import typing
 from collections.abc import Mapping
 
@@ -121,16 +122,24 @@ class dClimateClient:
                 await self._siren_client.aclose()
         except BaseException as error:
             siren_error = error
-        finally:
-            try:
-                if self._kubo_cas is not None:
-                    await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
-            except BaseException as kubo_error:
-                if siren_error is not None:
-                    raise siren_error from kubo_error
+
+        try:
+            if self._kubo_cas is not None:
+                await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
+        except BaseException as kubo_error:
+            if siren_error is None:
                 raise
-            finally:
-                self._kubo_cas = None
+            # Both cleanups failed. Follow the AsyncExitStack convention (the
+            # later error propagates with the earlier as __context__), except
+            # that a cancellation always outranks an ordinary error.
+            if isinstance(siren_error, asyncio.CancelledError) and not isinstance(
+                kubo_error, asyncio.CancelledError
+            ):
+                raise siren_error
+            kubo_error.__context__ = siren_error
+            raise
+        finally:
+            self._kubo_cas = None
 
         if siren_error is not None:
             raise siren_error

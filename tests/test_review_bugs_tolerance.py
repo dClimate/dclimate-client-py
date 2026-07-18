@@ -6,11 +6,6 @@ from dclimate_client_py import dclimate_zarr_errors as errors
 from dclimate_client_py.geotemporal_data import GeotemporalData
 
 
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    """Keep these unit tests independent of a local IPFS gateway."""
-
-
 def test_point_without_snap_uses_one_e_minus_five_tolerance(dataset):
     data = GeotemporalData(dataset, dataset_name="tolerance test")
     latitude = float(dataset.latitude.values[0])
