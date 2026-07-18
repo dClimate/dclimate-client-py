@@ -16,9 +16,7 @@ async def test_concatenate_datasets_uses_single_xarray_concat(monkeypatch):
         start = variant * 2
         times = np.arange(start, start + 3)
         values = variant * 100 + np.arange(3)
-        datasets.append(
-            xr.Dataset({"value": ("time", values)}, coords={"time": times})
-        )
+        datasets.append(xr.Dataset({"value": ("time", values)}, coords={"time": times}))
         if variant:
             expected_times.extend(times[1:].tolist())
             expected_values.extend(values[1:].tolist())

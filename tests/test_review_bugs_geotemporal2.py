@@ -54,9 +54,7 @@ def test_temporal_aggregation_quarter_uses_supported_alias_without_warning():
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        result = data.temporal_aggregation(
-            time_period="quarter", agg_method="mean"
-        )
+        result = data.temporal_aggregation(time_period="quarter", agg_method="mean")
 
     xr.testing.assert_allclose(
         result.data["temperature"],

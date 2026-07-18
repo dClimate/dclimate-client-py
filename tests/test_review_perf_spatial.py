@@ -230,9 +230,7 @@ def test_rectangle_non_monotonic_coordinates_fall_back_to_mask_path():
         coords={"latitude": latitudes, "longitude": longitudes},
     )
 
-    result = GeotemporalData(dataset, "synthetic").rectangle(
-        10.0, 185.0, 30.0, 195.0
-    )
+    result = GeotemporalData(dataset, "synthetic").rectangle(10.0, 185.0, 30.0, 195.0)
 
     np.testing.assert_array_equal(result.data.latitude, [20.0, 10.0, 30.0])
     np.testing.assert_array_equal(result.data.longitude, [185.0, 190.0, 195.0])
@@ -249,9 +247,7 @@ def test_rectangle_nan_coordinate_falls_back_to_mask_path():
         coords={"latitude": latitudes, "longitude": longitudes},
     )
 
-    result = GeotemporalData(dataset, "synthetic").rectangle(
-        10.0, 185.0, 30.0, 195.0
-    )
+    result = GeotemporalData(dataset, "synthetic").rectangle(10.0, 185.0, 30.0, 195.0)
 
     # The NaN latitude row must be excluded, exactly as the old mask did.
     np.testing.assert_array_equal(result.data.latitude, [10.0, 30.0])

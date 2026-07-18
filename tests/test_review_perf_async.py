@@ -73,8 +73,7 @@ async def test_load_dataset_does_not_stall_event_loop(monkeypatch):
     assert dataset["temperature"].values.tolist() == [21.0]
     assert metadata["cid"] == fake_cid
     max_tick_gap = max(
-        later - earlier
-        for earlier, later in zip(heartbeat_times, heartbeat_times[1:])
+        later - earlier for earlier, later in zip(heartbeat_times, heartbeat_times[1:])
     )
     assert max_tick_gap < 0.15, f"event loop stalled for {max_tick_gap:.3f}s"
 

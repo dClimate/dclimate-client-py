@@ -36,19 +36,14 @@ def pytest_collection_modifyitems(config, items):
     ipfs_items = [item for item in items if "ipfs" in item.keywords]
     skip_ipfs = None
     if ipfs_items:
-        gateway_url = os.environ.get(
-            "IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080"
-        )
+        gateway_url = os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
         if not is_ipfs_running(gateway_url):
             skip_ipfs = pytest.mark.skip(
                 reason=f"IPFS gateway not responding at {gateway_url}"
             )
 
     for item in items:
-        if (
-            "integration" in item.keywords
-            and not config.getoption("--run-integration")
-        ):
+        if "integration" in item.keywords and not config.getoption("--run-integration"):
             item.add_marker(skip_integration)
         if "ipfs" in item.keywords and skip_ipfs is not None:
             item.add_marker(skip_ipfs)

@@ -59,6 +59,7 @@ def __getattr__(name: str):
 def __dir__() -> list[str]:
     return sorted(set(globals()) | set(_LAZY_IMPORTS))
 
+
 __all__ = [
     "dClimateClient",
     "load_s3",

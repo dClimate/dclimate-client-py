@@ -33,8 +33,6 @@ def test_points_without_snap_uses_one_e_minus_five_tolerance(dataset):
     within_tolerance_mask = gpd.GeoSeries(
         [Point(longitude, latitude + 5e-6)], crs=4326
     ).geometry.values
-    selected = data.points(
-        within_tolerance_mask, epsg_crs=4326, snap_to_grid=False
-    )
+    selected = data.points(within_tolerance_mask, epsg_crs=4326, snap_to_grid=False)
     assert selected.data.latitude.item() == latitude
     assert selected.data.longitude.item() == longitude

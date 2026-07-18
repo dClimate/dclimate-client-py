@@ -77,9 +77,7 @@ def get_dataset_from_s3(dataset_name: str, bucket_name: str) -> xr.Dataset:
         raise DatasetNotFoundError(f"Invalid dataset name {dataset_name}")
 
     attrs = getattr(ds, "attrs", {})
-    if attrs.get(
-        "update_in_progress", getattr(ds, "update_in_progress", False)
-    ):
+    if attrs.get("update_in_progress", getattr(ds, "update_in_progress", False)):
         if attrs.get("initial_parse", getattr(ds, "initial_parse", False)):
             raise DatasetNotFoundError(
                 f"Dataset {dataset_name} is undergoing initial parse, retry request later"

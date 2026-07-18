@@ -39,11 +39,7 @@ def _run_pytest(*args: str) -> subprocess.CompletedProcess[str]:
 
 def _summary_counts(output: str) -> tuple[int, int]:
     summary_line = next(
-        (
-            line
-            for line in reversed(output.splitlines())
-            if SUMMARY_COUNT.search(line)
-        ),
+        (line for line in reversed(output.splitlines()) if SUMMARY_COUNT.search(line)),
         None,
     )
     assert summary_line is not None, f"pytest summary line not found:\n{output}"
@@ -75,8 +71,7 @@ def test_unmarked_async_tests_execute(tmp_path):
     # skipped with an "async def functions are not natively supported" warning.
     unmarked_async_test = tmp_path / "test_meta_unmarked_async.py"
     unmarked_async_test.write_text(
-        "async def test_unmarked_async_executes():\n"
-        "    assert True\n",
+        "async def test_unmarked_async_executes():\n    assert True\n",
         encoding="utf-8",
     )
     # -c points the child run at the repo config; without it the temp file's

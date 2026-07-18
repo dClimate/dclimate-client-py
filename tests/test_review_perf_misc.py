@@ -25,9 +25,7 @@ def test_points_uses_vectorized_coordinate_access(monkeypatch):
         coords={"latitude": latitudes, "longitude": longitudes},
     )
     coordinates = [
-        (longitude, latitude)
-        for latitude in latitudes
-        for longitude in longitudes
+        (longitude, latitude) for latitude in latitudes for longitude in longitudes
     ]
     points_mask = gpd.GeoSeries(
         [Point(longitude, latitude) for longitude, latitude in coordinates],
@@ -51,7 +49,9 @@ def test_points_uses_vectorized_coordinate_access(monkeypatch):
 
     assert property_accesses == 0
     np.testing.assert_array_equal(selected.data.latitude.values, latitudes.repeat(10))
-    np.testing.assert_array_equal(selected.data.longitude.values, np.tile(longitudes, 10))
+    np.testing.assert_array_equal(
+        selected.data.longitude.values, np.tile(longitudes, 10)
+    )
     np.testing.assert_array_equal(
         selected.data["temperature"].values,
         expected_values.reshape(-1),
@@ -213,3 +213,17 @@ def test_lazy_public_api_still_supports_geospatial_selection():
     completed = _run_in_fresh_interpreter(script)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_points_rejects_missing_geometries(dataset):
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    from dclimate_client_py import dclimate_zarr_errors as errors
+    from dclimate_client_py.geotemporal_data import GeotemporalData
+
+    mask = gpd.GeoSeries([Point(180.0, 0.0), None]).array
+    data = GeotemporalData(dataset, "missing-geometry")
+
+    with pytest.raises(errors.InvalidSelectionError, match="missing geometries"):
+        data.points(mask, epsg_crs=4326)

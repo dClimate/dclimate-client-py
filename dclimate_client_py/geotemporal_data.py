@@ -224,6 +224,12 @@ class GeotemporalData:
         import geopandas as gpd
 
         series = gpd.GeoSeries(points_mask).set_crs(epsg_crs).to_crs(4326)
+        if series.isna().any():
+            # GeoSeries.y maps missing geometries to NaN, which .sel would
+            # silently snap to an arbitrary grid cell.
+            raise errors.InvalidSelectionError(
+                "points_mask contains missing geometries"
+            )
         lats = xr.DataArray(series.y.to_numpy(), dims="point")
         lons = xr.DataArray(series.x.to_numpy(), dims="point")
 
@@ -411,9 +417,9 @@ class GeotemporalData:
         spatial_data = spatial_data.rio.write_crs("epsg:4326")
         mask = gpd.geoseries.GeoSeries(polygons_mask).set_crs(epsg_crs).to_crs(4326)
         min_lon, min_lat, max_lon, max_lat = mask.total_bounds
-        box_ds = self._new(spatial_data).rectangle(
-            min_lat, min_lon, max_lat, max_lon
-        ).data
+        box_ds = (
+            self._new(spatial_data).rectangle(min_lat, min_lon, max_lat, max_lon).data
+        )
         self._new(box_ds).check_dataset_size(point_limit=point_limit)
         try:
             shaped_ds = box_ds.rio.clip(mask, 4326, drop=True)
