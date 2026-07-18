@@ -5,7 +5,11 @@ This module provides direct access to a STAC server API for resolving dataset CI
 which is faster than traversing the IPFS-hosted catalog structure.
 """
 
+from collections.abc import Iterator
+from json import dumps
 from typing import Any, Dict, Optional, Set
+from urllib.parse import urljoin
+
 import requests
 
 from .datasets import SpatialExtent, TemporalExtent
@@ -13,16 +17,51 @@ from .datasets import SpatialExtent, TemporalExtent
 STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
 
-def _dataset_id_from_item_id(feature_id: str, collection: str) -> Optional[str]:
+_MAX_SEARCH_PAGES = 50
+
+
+def _dataset_and_variant_from_item_id(
+    feature_id: str,
+    collection: str,
+    dataset: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
     prefix = f"{collection}-"
     remainder = (
         feature_id[len(prefix) :] if feature_id.startswith(prefix) else feature_id
     )
-    dataset, _, _ = remainder.partition("-")
-    return dataset or None
+    if dataset is not None:
+        if remainder == dataset:
+            return dataset, None
+        dataset_prefix = f"{dataset}-"
+        if remainder.startswith(dataset_prefix):
+            return dataset, remainder[len(dataset_prefix) :] or None
+        return None, None
+
+    if variant is not None:
+        variant_suffix = f"-{variant}"
+        if remainder.endswith(variant_suffix):
+            return remainder[: -len(variant_suffix)] or None, variant
+        return None, None
+
+    parsed_dataset, separator, variant = remainder.partition("-")
+    return parsed_dataset or None, (variant or None) if separator else None
 
 
-def _feature_variant(feature: Dict[str, Any], collection: str) -> Optional[str]:
+def _dataset_id_from_item_id(
+    feature_id: str,
+    collection: str,
+    dataset: Optional[str] = None,
+) -> Optional[str]:
+    parsed_dataset, _ = _dataset_and_variant_from_item_id(
+        feature_id, collection, dataset
+    )
+    return parsed_dataset
+
+
+def _feature_variant(
+    feature: Dict[str, Any], collection: str, dataset: Optional[str] = None
+) -> Optional[str]:
     props = feature.get("properties") or {}
     variant = props.get("dclimate:variant")
     if variant:
@@ -31,12 +70,10 @@ def _feature_variant(feature: Dict[str, Any], collection: str) -> Optional[str]:
     feature_id = feature.get("id")
     if not isinstance(feature_id, str):
         return None
-    prefix = f"{collection}-"
-    remainder = (
-        feature_id[len(prefix) :] if feature_id.startswith(prefix) else feature_id
+    _, parsed_variant = _dataset_and_variant_from_item_id(
+        feature_id, collection, dataset
     )
-    _, _, variant = remainder.partition("-")
-    return variant or None
+    return parsed_variant
 
 
 def _feature_matches_dataset(
@@ -54,7 +91,59 @@ def _feature_matches_dataset(
     feature_id = feature.get("id")
     if not isinstance(feature_id, str):
         return False
-    return _dataset_id_from_item_id(feature_id, collection) == dataset
+    variant = props.get("dclimate:variant")
+    if variant:
+        parsed_dataset, _ = _dataset_and_variant_from_item_id(
+            feature_id, collection, variant=variant
+        )
+        return parsed_dataset == dataset
+    return _dataset_id_from_item_id(feature_id, collection, dataset) == dataset
+
+
+def _search_pages(
+    server_url: str,
+    body: Dict[str, Any],
+    timeout: int,
+) -> Iterator[Dict[str, Any]]:
+    """Yield bounded STAC search pages while following ``rel=next`` links."""
+    url = f"{server_url.rstrip('/')}/search"
+    method = "POST"
+    request_body: Optional[Dict[str, Any]] = body
+    seen: Set[tuple[str, str, str]] = set()
+
+    for _ in range(_MAX_SEARCH_PAGES):
+        page_key = (method, url, dumps(request_body, sort_keys=True, default=str))
+        if page_key in seen:
+            return
+        seen.add(page_key)
+
+        if method == "POST":
+            response = requests.post(url, json=request_body, timeout=timeout)
+        else:
+            response = requests.get(url, params=request_body or None, timeout=timeout)
+        response.raise_for_status()
+        page = response.json()
+        yield page
+
+        if not (page.get("features") or []):
+            return
+        next_link = next(
+            (
+                link
+                for link in page.get("links", []) or []
+                if link.get("rel") == "next" and link.get("href")
+            ),
+            None,
+        )
+        if next_link is None:
+            return
+
+        url = urljoin(url, next_link["href"])
+        method = str(next_link.get("method", "GET")).upper()
+        if method not in {"GET", "POST"}:
+            return
+        linked_body = next_link.get("body")
+        request_body = linked_body if isinstance(linked_body, dict) else None
 
 
 def resolve_cid_from_stac_server(
@@ -87,21 +176,34 @@ def resolve_cid_from_stac_server(
         "collections": [collection],
     }
 
-    response = requests.post(f"{server_url}/search", json=body, timeout=10)
-    response.raise_for_status()
-
-    features = response.json().get("features", [])
-
-    # Filter to the exact dataset. A prefix match would conflate datasets such
-    # as precipitation_total and precipitation_total_land.
-    matches = [f for f in features if _feature_matches_dataset(f, collection, dataset)]
+    matches = []
+    for page in _search_pages(server_url, body, timeout=10):
+        # Filter to the exact dataset. A prefix match would conflate datasets such
+        # as precipitation_total and precipitation_total_land.
+        page_matches = [
+            feature
+            for feature in page.get("features", []) or []
+            if _feature_matches_dataset(feature, collection, dataset)
+        ]
+        matches.extend(page_matches)
+        if variant and any(
+            _feature_variant(feature, collection, dataset) == variant
+            for feature in page_matches
+        ):
+            break
+        if variant is None and page_matches:
+            break
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
     # Select by variant or use default preference
     if variant:
         item = next(
-            (f for f in matches if _feature_variant(f, collection) == variant),
+            (
+                f
+                for f in matches
+                if _feature_variant(f, collection, dataset) == variant
+            ),
             None,
         )
         if not item:
@@ -116,7 +218,7 @@ def resolve_cid_from_stac_server(
                 (
                     f
                     for f in matches
-                    if _feature_variant(f, collection) == preferred
+                    if _feature_variant(f, collection, dataset) == preferred
                 ),
                 None,
             )
@@ -147,7 +249,7 @@ def list_available_datasets_from_stac_server(
     List all datasets/variants by querying a STAC API server directly.
 
     Fast path that mirrors ``list_available_datasets`` (the IPFS walker) without
-    traversing the IPFS-hosted catalog tree. Two requests:
+    traversing the IPFS-hosted catalog tree. It queries:
 
     1. ``GET  /collections`` — collection ids, titles
     2. ``POST /search``      — items, with dataset/variant/CID in properties
@@ -165,21 +267,11 @@ def list_available_datasets_from_stac_server(
       ``dclimate:observation`` properties — only when every item in the
       collection agrees, to avoid picking a misleading value when items
       disagree.
-    - The fixed ``limit: 1000`` covers today's catalog (~45 items) by a wide
-      margin. If the catalog grows past that, switch to following the STAC
-      ``next`` link instead of a single request.
+    - Search pagination is bounded to avoid looping on malformed ``next`` links.
     """
     collections_resp = requests.get(f"{server_url}/collections", timeout=10)
     collections_resp.raise_for_status()
-    search_resp = requests.post(
-        f"{server_url}/search",
-        json={"limit": 1000},
-        timeout=15,
-    )
-    search_resp.raise_for_status()
-
     collections_body = collections_resp.json()
-    search_body = search_resp.json()
 
     # Accumulator per collection. Built up from /collections then enriched by
     # the /search response. Collections that have no items end up filtered out
@@ -200,7 +292,12 @@ def list_available_datasets_from_stac_server(
             "datasets": {},  # dataset_name -> { variant_name -> variant_entry }
         }
 
-    for feature in search_body.get("features", []) or []:
+    search_features = (
+        feature
+        for page in _search_pages(server_url, {"limit": 100}, timeout=15)
+        for feature in page.get("features", []) or []
+    )
+    for feature in search_features:
         feature_id = feature.get("id", "")
         collection_id = feature.get("collection")
         if not collection_id and isinstance(feature_id, str) and "-" in feature_id:
@@ -229,13 +326,13 @@ def list_available_datasets_from_stac_server(
 
         # Prefer explicit dclimate:* properties; fall back to id-parsing for
         # items that pre-date the property convention.
-        id_parts = feature_id.split("-") if isinstance(feature_id, str) else []
-        dataset_name = props.get("dclimate:dataset_id") or (
-            id_parts[1] if len(id_parts) >= 2 else None
+        parsed_dataset, parsed_variant = (
+            _dataset_and_variant_from_item_id(feature_id, collection_id)
+            if isinstance(feature_id, str)
+            else (None, None)
         )
-        variant_name = props.get("dclimate:variant") or (
-            "-".join(id_parts[2:]) if len(id_parts) >= 3 else "default"
-        )
+        dataset_name = props.get("dclimate:dataset_id") or parsed_dataset
+        variant_name = props.get("dclimate:variant") or parsed_variant or "default"
         if not dataset_name:
             continue
 

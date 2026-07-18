@@ -11,6 +11,7 @@ import requests
 import pystac
 
 from .datasets import SpatialExtent, TemporalExtent
+from .stac_server import _dataset_and_variant_from_item_id
 
 logger = logging.getLogger(__name__)
 
@@ -295,14 +296,26 @@ def resolve_dataset_cid_from_stac(
 
     # Find the item matching dataset and variant
     candidates = []
+    selected_item = None
     for item in collection_obj.get_items():
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
-        item_id = item.id
-        prefix = f"{collection_obj.id}-"
-        remainder = item_id[len(prefix) :] if item_id.startswith(prefix) else item_id
-        parts = remainder.split("-")
-        item_dataset = parts[0] if parts else remainder
-        item_variant = parts[1] if len(parts) > 1 else None
+        properties = item.properties or {}
+        property_dataset = properties.get("dclimate:dataset_id")
+        property_variant = properties.get("dclimate:variant")
+        if property_dataset:
+            item_dataset = property_dataset
+            _, parsed_variant = _dataset_and_variant_from_item_id(
+                item.id, collection_obj.id, dataset
+            )
+        elif property_variant:
+            item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                item.id, collection_obj.id, variant=property_variant
+            )
+        else:
+            item_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                item.id, collection_obj.id, dataset
+            )
+        item_variant = property_variant or parsed_variant
 
         if item_dataset != dataset:
             continue
@@ -312,9 +325,6 @@ def resolve_dataset_cid_from_stac(
         if variant is not None and item_variant == variant:
             selected_item = item
             break
-    else:
-        selected_item = None
-
     if variant is not None:
         if not selected_item:
             raise ValueError(

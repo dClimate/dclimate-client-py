@@ -1,6 +1,8 @@
 import warnings
 
+import httpx
 import pytest
+import requests
 import xarray as xr
 
 import dclimate_client_py.dclimate_client as dclimate_client_module
@@ -29,19 +31,17 @@ class DummyGroupedStore:
 
 
 @pytest.mark.parametrize(
-    "message",
+    "error",
     [
-        "Connection refused",
-        "Max retries exceeded",
-        "Name or service not known",
-        "network is unreachable",
-        "nodename nor servname provided",
-        "temporary failure in name resolution",
-        "timed out opening sharded store",
+        ConnectionError("connection refused"),
+        TimeoutError("timed out opening sharded store"),
+        requests.ConnectionError("max retries exceeded"),
+        requests.Timeout("gateway timed out"),
+        httpx.ConnectError("connection refused"),
     ],
 )
-def test_is_connection_error_classifies_gateway_failures(message):
-    assert ipfs_retrieval._is_connection_error(RuntimeError(message))
+def test_is_connection_error_classifies_gateway_failures(error):
+    assert ipfs_retrieval._is_connection_error(error)
 
 
 @pytest.mark.asyncio

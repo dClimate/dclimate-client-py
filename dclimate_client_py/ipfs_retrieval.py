@@ -9,6 +9,9 @@ import time
 import warnings
 from typing import Any
 
+import aiohttp
+import httpx
+import requests
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
@@ -136,22 +139,23 @@ def _record_span_error(active_span: Span, exc: Exception) -> None:
 
 
 def _is_connection_error(exc: Exception) -> bool:
-    """Classify gateway and network failures from exception text."""
-    text = str(exc).lower()
-    return any(
-        token in text
-        for token in (
-            "connection refused",
-            "connection reset",
-            "max retries exceeded",
-            "name or service not known",
-            "network is unreachable",
-            "nodename nor servname",
-            "temporary failure in name resolution",
-            "timeout",
-            "timed out",
-        )
+    """Classify gateway and network failures by type, including chained causes."""
+    connection_error_types = (
+        OSError,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.Timeout,
+        httpx.RequestError,
+        aiohttp.ClientConnectionError,
+        aiohttp.ServerTimeoutError,
     )
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, connection_error_types):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _normalize_zarr_group(zarr_group: str | None) -> str | None:
