@@ -5,7 +5,8 @@ This module provides integration with STAC (SpatioTemporal Asset Catalog) format
 for discovering and accessing dClimate datasets stored on IPFS.
 """
 
-from typing import Optional, Dict, List, Set, Tuple, Any
+from os import PathLike
+from typing import Optional, Dict, List, Set, Tuple, Any, cast
 import logging
 import requests
 import pystac
@@ -77,7 +78,9 @@ def _resolve_child_by_dclimate_id(
     """Resolve a catalog child by its dclimate:id extra field."""
     for link in parent.get_child_links():
         if link.extra_fields.get("dclimate:id") == child_id:
-            return link.resolve_stac_object(root=parent).target, link
+            return cast(
+                pystac.Catalog, link.resolve_stac_object(root=parent).target
+            ), link
     return None, None
 
 
@@ -96,13 +99,16 @@ def _resolve_child_by_collection_slug(
         if collection_slug not in collections:
             continue
 
-        org_catalog = link.resolve_stac_object(root=parent).target
+        org_catalog = cast(pystac.Catalog, link.resolve_stac_object(root=parent).target)
         if org_catalog is None:
             continue
 
         for col_link in org_catalog.get_child_links():
             if col_link.extra_fields.get("dclimate:id") == collection_slug:
-                return col_link.resolve_stac_object(root=org_catalog).target, col_link
+                return cast(
+                    pystac.Catalog,
+                    col_link.resolve_stac_object(root=org_catalog).target,
+                ), col_link
 
     return None, None
 
@@ -128,7 +134,7 @@ class IPFSStacIO(pystac.StacIO):
         # gateway reads never depend on cookies.
         self.session = requests.Session()
 
-    def read_text(self, source: str, *args, **kwargs) -> str:
+    def read_text(self, source: str | PathLike[str], *args, **kwargs) -> str:
         """
         Read text content from a source URI.
 
@@ -144,17 +150,18 @@ class IPFSStacIO(pystac.StacIO):
         Raises:
             requests.HTTPError: If the HTTP request fails
         """
-        if source.startswith("ipfs://"):
-            cid = source.replace("ipfs://", "")
+        source_text = cast(str, source)
+        if source_text.startswith("ipfs://"):
+            cid = source_text.replace("ipfs://", "")
             url = f"{self.gateway_url}/ipfs/{cid}"
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
             return response.text
 
         # Fall back to default behavior for HTTP/HTTPS URLs
-        return super().read_text(source, *args, **kwargs)
+        return super().read_text(source, *args, **kwargs)  # type: ignore[safe-super]
 
-    def write_text(self, dest: str, txt: str, *args, **kwargs) -> None:
+    def write_text(self, dest: str | PathLike[str], txt: str, *args, **kwargs) -> None:
         """
         Write text content is not supported for IPFS.
 
@@ -335,6 +342,7 @@ def resolve_dataset_cid_from_stac(
                 continue
             break
 
+    assert selected_variant is not None
     if "data" in selected_item.assets:
         href = selected_item.assets["data"].href
         if href.startswith("ipfs://"):
@@ -405,7 +413,9 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
         if is_org:
             org_id = child_id
             org_title = link.title or org_id
-            org_catalog = link.resolve_stac_object(root=catalog).target
+            org_catalog = cast(
+                pystac.Catalog, link.resolve_stac_object(root=catalog).target
+            )
 
             # Map collection -> category (historical/forecast/etc.)
             collection_categories: Dict[str, str] = {}
@@ -450,7 +460,10 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
 
                 # Resolve items to extract per-variant extents
                 try:
-                    col_catalog = col_link.resolve_stac_object(root=org_catalog).target
+                    col_catalog = cast(
+                        pystac.Catalog,
+                        col_link.resolve_stac_object(root=org_catalog).target,
+                    )
                     if col_catalog is not None:
                         for item in col_catalog.get_items():
                             # Prefer explicit dclimate:* properties (like the

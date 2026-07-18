@@ -1,5 +1,5 @@
 import asyncio
-from typing import Self
+from typing import Self, cast
 from zarr.abc.codec import BytesBytesCodec
 from zarr.core.buffer import Buffer
 from zarr.core.common import JSON
@@ -43,8 +43,8 @@ class EncryptionCodec(BytesBytesCodec):
         Returns:
             Self: An instance of EncryptionCodec.
         """
-        configuration = data.get("configuration", {})
-        header = configuration.get("header", "dclimate-Zarr")
+        configuration = cast(dict[str, JSON], data.get("configuration", {}))
+        header = cast(str, configuration.get("header", "dclimate-Zarr"))
         return cls(header=header)
 
     def to_dict(self) -> dict[str, JSON]:

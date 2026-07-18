@@ -40,7 +40,12 @@ class GeotemporalData:
         data variable.
     """
 
-    def __init__(self, data: xr.Dataset, dataset_name: str, data_var: str = None):
+    def __init__(
+        self,
+        data: xr.Dataset,
+        dataset_name: str,
+        data_var: typing.Optional[str] = None,
+    ):
         self.data = data
         self.dataset_name = dataset_name
         self._data_var = data_var
@@ -687,7 +692,8 @@ class GeotemporalData:
         """
         vals = self.data_var.values
         ret_dict = {}
-        dimensions = []
+        dimensions: list[typing.Any] = []
+        missing_value: typing.Any = None
         ret_dict["units"] = self.data_var.attrs.get("units", "unknown")
         if "time" in self.data:
             ret_dict["times"] = (
@@ -702,13 +708,17 @@ class GeotemporalData:
             )
             ret_dict["point_coords_order"] = ["latitude", "longitude"]
             dimensions.insert(0, "point")
-            ret_dict["data"] = np.where(~np.isfinite(vals), None, vals).T.tolist()
+            ret_dict["data"] = np.where(
+                ~np.isfinite(vals), missing_value, vals
+            ).T.tolist()
         else:
             for dim in self.data_var.dims:
                 if dim != "time":
                     ret_dict[f"{dim}s"] = self.data[dim].values.flatten().tolist()
                     dimensions.append(dim)
-            ret_dict["data"] = np.where(~np.isfinite(vals), None, vals).tolist()
+            ret_dict["data"] = np.where(
+                ~np.isfinite(vals), missing_value, vals
+            ).tolist()
         ret_dict["dimensions_order"] = dimensions
         try:
             if self.data.update_in_progress and not self.data.update_is_append_only:
@@ -720,19 +730,52 @@ class GeotemporalData:
     def query(
         self,
         forecast_reference_time: typing.Union[str, datetime.datetime, None] = None,
-        point_kwargs: dict = None,
-        circle_kwargs: dict = None,
-        rectangle_kwargs: dict = None,
-        polygon_kwargs: dict = None,
-        multiple_points_kwargs: dict = None,
-        bounds: BoundsSelection = None,
-        bounds_options: dict = None,
-        spatial_agg_kwargs: dict = None,
-        temporal_agg_kwargs: dict = None,
-        rolling_agg_kwargs: dict = None,
+        point_kwargs: typing.Optional[dict] = None,
+        circle_kwargs: typing.Optional[dict] = None,
+        rectangle_kwargs: typing.Optional[dict] = None,
+        polygon_kwargs: typing.Optional[dict] = None,
+        multiple_points_kwargs: typing.Optional[dict] = None,
+        bounds: typing.Optional[BoundsSelection] = None,
+        bounds_options: typing.Optional[dict] = None,
+        spatial_agg_kwargs: typing.Optional[dict] = None,
+        temporal_agg_kwargs: typing.Optional[dict] = None,
+        rolling_agg_kwargs: typing.Optional[dict] = None,
         time_range: typing.Optional[typing.List[datetime.datetime]] = None,
         point_limit: int = DEFAULT_POINT_LIMIT,
     ) -> "GeotemporalData":
+        if point_kwargs is not None:
+            missing = [
+                key for key in ("latitude", "longitude") if key not in point_kwargs
+            ]
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"point_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
+        if circle_kwargs is not None:
+            missing = []
+            if "lat" not in circle_kwargs and "center_lat" not in circle_kwargs:
+                missing.append("lat")
+            if "lon" not in circle_kwargs and "center_lon" not in circle_kwargs:
+                missing.append("lon")
+            if "radius" not in circle_kwargs:
+                missing.append("radius")
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"circle_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
+        if rectangle_kwargs is not None:
+            missing = [
+                key
+                for key in ("min_lat", "min_lon", "max_lat", "max_lon")
+                if key not in rectangle_kwargs
+            ]
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"rectangle_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
         # Filter data down temporally, then spatially, and check that the size of
         # resulting dataset fits within the limit. While a user can get the entire DS by
         # providing no filters, this will almost certainly cause the size checks to fail
@@ -742,9 +785,17 @@ class GeotemporalData:
         if point_kwargs:
             data = data.point(**point_kwargs)
         elif circle_kwargs:
-            lat = circle_kwargs.get("lat", circle_kwargs.get("center_lat"))
-            lon = circle_kwargs.get("lon", circle_kwargs.get("center_lon"))
-            radius = circle_kwargs.get("radius")
+            lat = (
+                circle_kwargs["lat"]
+                if "lat" in circle_kwargs
+                else circle_kwargs["center_lat"]
+            )
+            lon = (
+                circle_kwargs["lon"]
+                if "lon" in circle_kwargs
+                else circle_kwargs["center_lon"]
+            )
+            radius = circle_kwargs["radius"]
             data = data.circle(lat=lat, lon=lon, radius=radius)
         elif rectangle_kwargs:
             data = data.rectangle(**rectangle_kwargs)
@@ -998,7 +1049,7 @@ def _circle_bounding_box(
 
     latitude_dimension = latitudes.dims[0]
     longitude_dimension = longitudes.dims[0]
-    coordinate_endpoints = (
+    coordinate_endpoints: tuple[typing.Any, ...] = (
         latitudes.isel({latitude_dimension: 0}).values.item(),
         latitudes.isel({latitude_dimension: -1}).values.item(),
         longitudes.isel({longitude_dimension: 0}).values.item(),
@@ -1035,11 +1086,11 @@ def _circle_bounding_box(
 
 
 def _haversine(
-    lat1: typing.Union[np.ndarray, float],
-    lon1: typing.Union[np.ndarray, float],
-    lat2: typing.Union[np.ndarray, float],
-    lon2: typing.Union[np.ndarray, float],
-) -> typing.Union[np.ndarray, float]:
+    lat1: typing.Union[np.ndarray, xr.DataArray, float],
+    lon1: typing.Union[np.ndarray, xr.DataArray, float],
+    lat2: typing.Union[np.ndarray, xr.DataArray, float],
+    lon2: typing.Union[np.ndarray, xr.DataArray, float],
+) -> typing.Union[np.ndarray, xr.DataArray, float]:
     """Calculates arclength distance in km between coordinate pairs,
         assuming the earth is a perfect sphere
 

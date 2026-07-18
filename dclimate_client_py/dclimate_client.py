@@ -36,6 +36,8 @@ from .siren.types import (
     SirenRegion,
 )
 
+DEFAULT_PUBLIC_GATEWAY = "https://ipfs-gateway.dclimate.net"
+
 
 class dClimateClient:
     """
@@ -84,7 +86,7 @@ class dClimateClient:
 
     def __init__(
         self,
-        gateway_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
+        gateway_base_url: typing.Optional[str] = DEFAULT_PUBLIC_GATEWAY,
         rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
         stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
         siren: typing.Optional[SirenOptions] = None,
@@ -242,17 +244,17 @@ class dClimateClient:
                 "Use 'async with dClimateClient() as client:'"
             )
 
-        resolved_collection = collection
-        if (
-            organization
-            and collection
-            and not collection.startswith(f"{organization}_")
-        ):
-            resolved_collection = f"{organization}_{collection}"
-
         # Case 1: Direct CID provided - bypass catalog resolution
+        metadata: DatasetMetadata
         if cid:
-            slug_collection = resolved_collection or collection or "unknown"
+            direct_collection = collection
+            if (
+                organization
+                and direct_collection
+                and not direct_collection.startswith(f"{organization}_")
+            ):
+                direct_collection = f"{organization}_{direct_collection}"
+            slug_collection = direct_collection or "unknown"
             direct_variant = variant or "unknown"
             dataset_slug = (
                 f"{organization}/{slug_collection}/{dataset}/{direct_variant}"
@@ -267,8 +269,8 @@ class dClimateClient:
             )
 
             # Build metadata for direct CID case
-            metadata: DatasetMetadata = {
-                "collection": resolved_collection or "unknown",
+            metadata = {
+                "collection": direct_collection or "unknown",
                 "dataset": dataset,
                 "variant": direct_variant,
                 "slug": dataset_slug,
@@ -278,8 +280,8 @@ class dClimateClient:
                 "source": "direct_cid",
                 "organization": organization
                 or (
-                    resolved_collection.split("_")[0]
-                    if resolved_collection and "_" in resolved_collection
+                    direct_collection.split("_")[0]
+                    if direct_collection and "_" in direct_collection
                     else None
                 ),
             }
@@ -295,6 +297,10 @@ class dClimateClient:
             raise InvalidSelectionError(
                 "collection parameter is required. Use client.list_datasets() to see available collections."
             )
+
+        resolved_collection = collection
+        if organization and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
 
         resolved: typing.Optional[ResolvedDataset] = None
 
@@ -326,7 +332,11 @@ class dClimateClient:
                     if self._stac_catalog is None:
                         self._stac_catalog = await asyncio.to_thread(
                             load_stac_catalog,
-                            gateway_url=self._gateway_base_url,
+                            gateway_url=(
+                                self._gateway_base_url
+                                if self._gateway_base_url is not None
+                                else DEFAULT_PUBLIC_GATEWAY
+                            ),
                         )
 
             if not organization and resolved_collection:
@@ -351,6 +361,8 @@ class dClimateClient:
                 organization=organization,
             )
 
+        assert resolved is not None
+
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
@@ -359,7 +371,7 @@ class dClimateClient:
         )
 
         # Build metadata for STAC case
-        metadata: DatasetMetadata = {
+        metadata = {
             "collection": resolved_collection,
             "dataset": dataset,
             "variant": resolved.variant,
@@ -481,7 +493,13 @@ class dClimateClient:
         from .stac_catalog import load_stac_catalog, list_available_datasets
 
         if self._stac_catalog is None:
-            self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
+            self._stac_catalog = load_stac_catalog(
+                gateway_url=(
+                    self._gateway_base_url
+                    if self._gateway_base_url is not None
+                    else DEFAULT_PUBLIC_GATEWAY
+                )
+            )
 
         return list_available_datasets(self._stac_catalog)
 
@@ -506,7 +524,12 @@ class dClimateClient:
             async with self._stac_catalog_lock:
                 if self._stac_catalog is None:
                     self._stac_catalog = await asyncio.to_thread(
-                        load_stac_catalog, gateway_url=self._gateway_base_url
+                        load_stac_catalog,
+                        gateway_url=(
+                            self._gateway_base_url
+                            if self._gateway_base_url is not None
+                            else DEFAULT_PUBLIC_GATEWAY
+                        ),
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
