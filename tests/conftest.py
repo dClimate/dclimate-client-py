@@ -31,13 +31,27 @@ def pytest_configure(config):
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests unless --run-integration is passed."""
-    if config.getoption("--run-integration"):
-        return
+    """Gate tests that require external integration services."""
     skip_integration = pytest.mark.skip(reason="need --run-integration option to run")
+    ipfs_items = [item for item in items if "ipfs" in item.keywords]
+    skip_ipfs = None
+    if ipfs_items:
+        gateway_url = os.environ.get(
+            "IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080"
+        )
+        if not is_ipfs_running(gateway_url):
+            skip_ipfs = pytest.mark.skip(
+                reason=f"IPFS gateway not responding at {gateway_url}"
+            )
+
     for item in items:
-        if "integration" in item.keywords:
+        if (
+            "integration" in item.keywords
+            and not config.getoption("--run-integration")
+        ):
             item.add_marker(skip_integration)
+        if "ipfs" in item.keywords and skip_ipfs is not None:
+            item.add_marker(skip_ipfs)
 
 
 HERE = pathlib.Path(__file__).parent
@@ -130,18 +144,6 @@ def single_var_dataset():
     return make_dataset(vars=1)
 
 
-# --- Add IPFS Connection Check Fixture ---
-# We need the check_ipfs_connection fixture available for multiple test files
-# Let's reuse the one from test_integration_ipfs.py
-
-
-@pytest.fixture(scope="session")  # Changed scope to session for efficiency
-def ipfs_gateway_url():
-    """Returns the IPFS gateway URL to check."""
-    # Prioritize environment variable, then default from py-hamt's IPFSStore
-    return os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
-
-
 def is_ipfs_running(gateway_url: str) -> bool:
     """Check if IPFS daemon Gateway is responsive."""
 
@@ -175,20 +177,6 @@ def is_ipfs_running(gateway_url: str) -> bool:
     except requests.exceptions.RequestException as e:
         print(f"IPFS Gateway check failed with unexpected error: {e}")
         return False
-
-
-# Apply autouse=True to run this check once for the session for all tests
-@pytest.fixture(scope="session", autouse=True)
-def check_ipfs_connection(ipfs_gateway_url):
-    """Skips tests if IPFS daemon Gateway is not accessible."""
-    if not is_ipfs_running(ipfs_gateway_url):
-        pytest.skip(
-            f"IPFS daemon Gateway not responding at {ipfs_gateway_url}. Skipping integration tests."
-        )
-    else:
-        print(
-            f"IPFS daemon Gateway responding at {ipfs_gateway_url}. Proceeding with integration tests."
-        )
 
 
 # Define known dataset IDs accessible via STAC for tests

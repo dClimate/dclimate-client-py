@@ -21,11 +21,6 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.fixture(scope="session", autouse=True)
-def check_ipfs_connection():
-    """Keep these infrastructure checks independent of the global IPFS gate."""
-
-
 def _run_pytest(*args: str) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["IPFS_GATEWAY_URI_STEM"] = "http://127.0.0.1:9"
@@ -74,14 +69,32 @@ def test_offline_unit_tests_run_without_ipfs_gateway():
     )
 
 
-def test_unmarked_async_tests_execute():
-    result = _run_pytest("test_stac_integration.py", "-q")
+def test_unmarked_async_tests_execute(tmp_path):
+    # An async test WITHOUT @pytest.mark.asyncio only executes when the suite
+    # configures pytest-asyncio (asyncio_mode = "auto"); otherwise it is
+    # skipped with an "async def functions are not natively supported" warning.
+    unmarked_async_test = tmp_path / "test_meta_unmarked_async.py"
+    unmarked_async_test.write_text(
+        "async def test_unmarked_async_executes():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    # -c points the child run at the repo config; without it the temp file's
+    # rootdir has no pyproject.toml and asyncio_mode would never apply.
+    result = _run_pytest(
+        str(unmarked_async_test),
+        "-c",
+        str(PROJECT_ROOT / "pyproject.toml"),
+        "-q",
+    )
 
     unsupported_message = "async def functions are not natively supported"
     assert unsupported_message not in result.stdout, result.stdout
 
-    _, skipped = _summary_counts(result.stdout)
-    assert skipped == 0, f"async tests were skipped instead of executed:\n{result.stdout}"
+    passed, skipped = _summary_counts(result.stdout)
+    assert passed == 1 and skipped == 0, (
+        f"unmarked async test was not executed:\n{result.stdout}"
+    )
 
 
 def test_root_collection_is_confined_to_tests_directory():

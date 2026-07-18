@@ -14,6 +14,9 @@ from dclimate_client_py.stac_server import (
 )
 
 
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture(scope="module")
 def stac_server_url():
     """Get STAC server URL from environment or use default."""

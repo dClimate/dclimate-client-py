@@ -3,7 +3,7 @@
 Test script for STAC integration
 
 This script tests the STAC catalog integration with the dClimate client.
-Run with: python test_stac_integration.py
+Run with: uv run python scripts/stac_integration.py
 """
 
 import asyncio

@@ -28,11 +28,6 @@ class DummyGroupedStore:
         return {"1", "0"}
 
 
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    return None
-
-
 @pytest.mark.parametrize(
     "message",
     [

@@ -63,6 +63,9 @@ dev = ["pre-commit>=4.1.0", "ruff>=0.9.5"]
 py_hamt = { git = "https://github.com/dClimate/py-hamt", branch = "review-fixes-integration" }
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "ipfs: marks tests requiring a running IPFS daemon and network access",
     "integration: marks integration tests (often slower, may require external services like IPFS)",

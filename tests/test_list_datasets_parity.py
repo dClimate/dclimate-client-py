@@ -22,9 +22,8 @@ Run with::
 
     pytest tests/test_list_datasets_parity.py --run-integration
 
-The autouse ``check_ipfs_connection`` fixture in ``conftest.py`` points at a
-local IPFS daemon by default; override via the ``IPFS_GATEWAY_URI_STEM``
-environment variable to point at the public gateway.
+The ``ipfs`` marker gate checks a local IPFS daemon by default; override
+``IPFS_GATEWAY_URI_STEM`` to point at the public gateway.
 """
 
 import json
@@ -44,7 +43,7 @@ from dclimate_client_py.stac_server import (
 )
 
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.ipfs]
 
 
 STAC_URL = os.environ.get("STAC_SERVER_URL", STAC_SERVER_URL)

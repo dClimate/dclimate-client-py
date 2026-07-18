@@ -10,10 +10,7 @@ import pystac
 from dclimate_client_py import stac_catalog
 
 
-# Mark all tests in this module to use the IPFS connection check
-pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
-
-
+@pytest.mark.ipfs
 class TestGetRootCatalogCid:
     """Test the get_root_catalog_cid function."""
 
@@ -58,6 +55,7 @@ class TestIPFSStacIO:
         assert stac_io.gateway_url == "https://ipfs-gateway.dclimate.net"
         assert not stac_io.gateway_url.endswith("/")
 
+    @pytest.mark.ipfs
     def test_read_text_with_ipfs_uri(self):
         """Test reading content from ipfs:// URI via gateway."""
         gateway_url = "https://ipfs-gateway.dclimate.net"
@@ -79,6 +77,7 @@ class TestIPFSStacIO:
         assert "type" in catalog_data
         assert catalog_data["type"] in ["Catalog", "Collection"]
 
+    @pytest.mark.ipfs
     def test_read_text_handles_ipfs_uri_correctly(self):
         """Test that IPFS URIs are properly transformed to gateway HTTP URLs."""
         gateway_url = "https://ipfs-gateway.dclimate.net"
@@ -101,6 +100,7 @@ class TestIPFSStacIO:
         data = json.loads(content)
         assert "type" in data
 
+    @pytest.mark.ipfs
     def test_read_text_multiple_cids(self):
         """Test reading from multiple different CIDs."""
         gateway_url = "https://ipfs-gateway.dclimate.net"
@@ -131,6 +131,7 @@ class TestIPFSStacIO:
         assert "not supported" in str(exc_info.value).lower()
 
 
+@pytest.mark.ipfs
 class TestLoadStacCatalog:
     """Test the load_stac_catalog function."""
 
@@ -186,6 +187,7 @@ class TestLoadStacCatalog:
         assert isinstance(collection, (pystac.Collection, pystac.Catalog))
 
 
+@pytest.mark.ipfs
 class TestResolveDatasetCidFromStac:
     """Test the resolve_dataset_cid_from_stac function."""
 
@@ -335,6 +337,7 @@ class TestResolveDatasetCidFromStac:
         assert "variant" in str(exc_info.value).lower()
 
 
+@pytest.mark.ipfs
 class TestListAvailableDatasets:
     """Test the list_available_datasets function."""
 
@@ -424,6 +427,7 @@ class TestListAvailableDatasets:
             assert len(collection_id) > 0
 
 
+@pytest.mark.ipfs
 class TestIntegrationEndToEnd:
     """Integration tests that exercise the full workflow."""
 

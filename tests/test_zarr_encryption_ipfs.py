@@ -129,6 +129,7 @@ def test_compute_encoded_size():
 
 
 @pytest.mark.asyncio
+@pytest.mark.ipfs
 async def test_upload_then_read(
     random_zarr_dataset: tuple[str, xr.Dataset], original_encryption_key: bytes
 ):
