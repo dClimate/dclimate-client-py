@@ -8,13 +8,27 @@ for discovering and accessing dClimate datasets stored on IPFS.
 from os import PathLike
 from typing import Optional, Dict, List, Set, Tuple, Any, cast
 import logging
-import requests
+from threading import Lock
+
+import httpx
 import pystac
 
 from .datasets import SpatialExtent, TemporalExtent
 from .stac_server import ResolvedDataset, _dataset_and_variant_from_item_id
 
 logger = logging.getLogger(__name__)
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = Lock()
+
+
+def _client() -> httpx.Client:
+    """Return the process-wide pooled client used for synchronous STAC reads."""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        with _HTTP_CLIENT_LOCK:
+            if _HTTP_CLIENT is None:
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+    return _HTTP_CLIENT
 
 
 def get_root_catalog_cid() -> str:
@@ -27,11 +41,11 @@ def get_root_catalog_cid() -> str:
         str: The IPFS CID of the root STAC catalog
 
     Raises:
-        requests.HTTPError: If the API request fails
+        httpx.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
     url = "https://ipfs-gateway.dclimate.net/stac"
-    response = requests.get(url, timeout=30)
+    response = _client().get(url, timeout=30)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -129,10 +143,9 @@ class IPFSStacIO(pystac.StacIO):
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
         """
         self.gateway_url = gateway_url.rstrip("/")
-        # Shared across asyncio.to_thread workers. urllib3's connection pool
-        # is thread-safe for stateless GETs; the cookie jar is not, but IPFS
-        # gateway reads never depend on cookies.
-        self.session = requests.Session()
+        # Shared across asyncio.to_thread workers. httpx.Client is thread-safe
+        # for concurrent requests and pools connections across gateway reads.
+        self.client = _client()
 
     def read_text(self, source: str | PathLike[str], *args, **kwargs) -> str:
         """
@@ -148,13 +161,13 @@ class IPFSStacIO(pystac.StacIO):
             str: The text content
 
         Raises:
-            requests.HTTPError: If the HTTP request fails
+            httpx.HTTPError: If the HTTP request fails
         """
         source_text = cast(str, source)
         if source_text.startswith("ipfs://"):
             cid = source_text.replace("ipfs://", "")
             url = f"{self.gateway_url}/ipfs/{cid}"
-            response = self.session.get(url, timeout=30)
+            response = self.client.get(url, timeout=30)
             response.raise_for_status()
             return response.text
 
@@ -185,7 +198,7 @@ def load_stac_catalog(
         pystac.Catalog: The loaded STAC catalog with all links and references
 
     Raises:
-        requests.HTTPError: If fetching from IPFS fails
+        httpx.HTTPError: If fetching from IPFS fails
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:

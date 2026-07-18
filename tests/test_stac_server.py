@@ -6,8 +6,8 @@ These tests require a running STAC server at localhost:8081 (or STAC_SERVER_URL 
 """
 
 import os
+import httpx
 import pytest
-import requests
 from dclimate_client_py.stac_server import (
     ResolvedDataset,
     resolve_cid_from_stac_server,
@@ -28,20 +28,20 @@ def stac_server_url():
 def check_stac_server(stac_server_url):
     """Check if STAC server is available, skip tests if not."""
     try:
-        response = requests.post(
+        response = httpx.post(
             f"{stac_server_url}/search",
             json={"limit": 1},
             timeout=5,
         )
         response.raise_for_status()
-    except (requests.ConnectionError, requests.Timeout, requests.HTTPError):
+    except httpx.HTTPError:
         pytest.skip(f"STAC server not available at {stac_server_url}")
 
 
 @pytest.fixture(scope="module")
 def available_dataset(stac_server_url, check_stac_server):
     """Get an available dataset from the STAC server for testing."""
-    response = requests.post(
+    response = httpx.post(
         f"{stac_server_url}/search",
         json={"limit": 10},
         timeout=10,
@@ -87,7 +87,7 @@ class TestStacServerConnection:
 
     def test_server_search_endpoint(self, stac_server_url, check_stac_server):
         """Test that search endpoint responds."""
-        response = requests.post(
+        response = httpx.post(
             f"{stac_server_url}/search",
             json={"limit": 1},
             timeout=10,
@@ -205,9 +205,7 @@ class TestResolveCidFromStacServer:
 
     def test_resolve_cid_connection_error_on_bad_url(self):
         """Test that connection error is raised for unreachable server."""
-        with pytest.raises(
-            (requests.ConnectionError, requests.exceptions.RequestException)
-        ):
+        with pytest.raises(httpx.HTTPError):
             resolve_cid_from_stac_server(
                 collection="any",
                 dataset="any",
@@ -237,7 +235,7 @@ class TestMultipleDatasets:
     def test_resolve_multiple_datasets(self, stac_server_url, check_stac_server):
         """Test resolving CIDs for multiple datasets from the server."""
         # Get multiple datasets
-        response = requests.post(
+        response = httpx.post(
             f"{stac_server_url}/search",
             json={"limit": 50},
             timeout=10,

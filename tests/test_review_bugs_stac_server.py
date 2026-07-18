@@ -1,28 +1,21 @@
-from typing import Any
+import json
 
-
+import httpx
 import dclimate_client_py.stac_server as stac_server
 
 
-class _Response:
-    def __init__(self, payload: dict[str, Any]):
-        self._payload = payload
-
-    def json(self):
-        return self._payload
-
-    def raise_for_status(self):
-        pass
-
-
 def _mock_search(monkeypatch, features):
-    def post(url, *, json, timeout):
-        assert url == "https://stac.example/search"
-        assert json == {"limit": 100, "collections": ["ecmwf_era5"]}
-        assert timeout == 10
-        return _Response({"features": features})
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url == "https://stac.example/search"
+        assert json.loads(request.content) == {
+            "limit": 100,
+            "collections": ["ecmwf_era5"],
+        }
+        assert set(request.extensions["timeout"].values()) == {10}
+        return httpx.Response(200, json={"features": features}, request=request)
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(stac_server, "_client", lambda: client)
 
 
 def test_resolve_variant_falls_back_to_variant_encoded_in_item_id(monkeypatch):

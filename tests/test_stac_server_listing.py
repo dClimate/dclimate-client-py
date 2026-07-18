@@ -1,7 +1,7 @@
 """
 Unit tests for ``list_available_datasets_from_stac_server``.
 
-These are pure unit tests — ``requests.get`` / ``requests.post`` are mocked, so
+These are pure unit tests — ``httpx.MockTransport`` handles all requests, so
 the tests run offline and don't depend on the public STAC server or the IPFS
 gateway. Integration coverage (parity with the IPFS walker) lives in
 ``test_list_datasets_parity.py`` and is gated behind ``--run-integration``.
@@ -11,46 +11,37 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import httpx
 import pytest
-import requests
 
+from dclimate_client_py import stac_server
 from dclimate_client_py.stac_server import (
     list_available_datasets_from_stac_server,
     resolve_cid_from_stac_server,
 )
 
 
-def _mock_response(payload: Dict[str, Any], status: int = 200):
-    """Build a stand-in for a ``requests.Response`` that has ``json()`` and
-    ``raise_for_status()``."""
-
-    class _Resp:
-        def __init__(self) -> None:
-            self.status_code = status
-
-        def json(self):
-            return payload
-
-        def raise_for_status(self):
-            if status >= 400:
-                raise requests.HTTPError(f"HTTP {status}")
-
-    return _Resp()
+def _mock_response(
+    request: httpx.Request, payload: Dict[str, Any], status: int = 200
+) -> httpx.Response:
+    return httpx.Response(status, json=payload, request=request)
 
 
 def _install_mocks(monkeypatch, *, collections_body, search_body):
-    """Patch requests.get/post to return canned bodies based on URL."""
+    """Inject canned collection/search responses through the client accessor."""
 
-    def fake_get(url, *args, **kwargs):
-        assert url.endswith("/collections"), f"unexpected GET {url}"
-        return _mock_response(collections_body)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.path.endswith("/collections"), (
+                f"unexpected GET {request.url}"
+            )
+            return _mock_response(request, collections_body)
+        assert request.method == "POST"
+        assert request.url.path.endswith("/search"), f"unexpected POST {request.url}"
+        return _mock_response(request, search_body)
 
-    def fake_post(url, *args, **kwargs):
-        assert url.endswith("/search"), f"unexpected POST {url}"
-        return _mock_response(search_body)
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    monkeypatch.setattr(requests, "post", fake_post)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(stac_server, "_client", lambda: client)
 
 
 SAMPLE_COLLECTIONS = {
@@ -347,15 +338,15 @@ def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
 
 
 def test_collections_endpoint_error_propagates(monkeypatch):
-    def failing_get(url, *args, **kwargs):
-        return _mock_response({}, status=500)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _mock_response(request, {}, status=500)
+        return _mock_response(request, {"features": []})
 
-    monkeypatch.setattr(requests, "get", failing_get)
-    monkeypatch.setattr(
-        requests, "post", lambda *a, **k: _mock_response({"features": []})
-    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(stac_server, "_client", lambda: client)
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(httpx.HTTPStatusError):
         list_available_datasets_from_stac_server("https://example.test")
 
 

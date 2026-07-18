@@ -2,8 +2,6 @@ import warnings
 
 import httpx
 import pytest
-import requests
-import urllib3
 import xarray as xr
 
 import dclimate_client_py.dclimate_client as dclimate_client_module
@@ -41,10 +39,10 @@ def _chained(wrapper: Exception, cause: Exception) -> Exception:
     [
         ConnectionError("connection refused"),
         TimeoutError("timed out opening sharded store"),
-        requests.ConnectionError("max retries exceeded"),
-        requests.Timeout("gateway timed out"),
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.ReadTimeout("gateway timed out"),
         httpx.ConnectError("connection refused"),
-        urllib3.exceptions.MaxRetryError(None, "http://gateway", "max retries"),
+        httpx.ConnectError("max retries exceeded"),
         _chained(RuntimeError("wrapped"), httpx.ReadTimeout("gateway timed out")),
     ],
 )
@@ -59,7 +57,11 @@ def test_is_connection_error_classifies_gateway_failures(error):
         PermissionError("permission denied"),
         IsADirectoryError("is a directory"),
         ValueError("not a sharded zarr store"),
-        requests.HTTPError("500 Server Error: Internal Server Error"),
+        httpx.HTTPStatusError(
+            "500 Server Error: Internal Server Error",
+            request=httpx.Request("GET", "https://gateway.example"),
+            response=httpx.Response(500),
+        ),
         _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
     ],
 )

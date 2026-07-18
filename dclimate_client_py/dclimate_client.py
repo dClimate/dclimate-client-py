@@ -13,7 +13,6 @@ if typing.TYPE_CHECKING:
     import pystac
 
 import httpx
-import requests
 import xarray as xr
 from py_hamt import KuboCAS
 
@@ -265,7 +264,7 @@ class dClimateClient:
             If dataset cannot be found in STAC catalog
         InvalidSelectionError
             If collection parameter is not provided (when not using direct CID)
-        requests.RequestException
+        httpx.HTTPError
             If connection to IPFS gateway fails
 
         Examples
@@ -361,7 +360,7 @@ class dClimateClient:
                     variant=variant,
                     server_url=self._stac_server_url,
                 )
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 # Fall back when server lookup fails or returns no usable match.
                 pass
 
@@ -533,7 +532,7 @@ class dClimateClient:
         if self._stac_server_url:
             try:
                 return list_available_datasets_from_stac_server(self._stac_server_url)
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 pass
 
         # Fallback: walk the IPFS-hosted catalog.
@@ -562,7 +561,7 @@ class dClimateClient:
                 return await asyncio.to_thread(
                     list_available_datasets_from_stac_server, self._stac_server_url
                 )
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 pass
 
         from .stac_catalog import load_stac_catalog, list_available_datasets

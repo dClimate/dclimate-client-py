@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 
+import httpx
 import pystac
 
 from dclimate_client_py import ipfs_retrieval, stac_catalog, stac_server
@@ -17,6 +19,19 @@ class _Response:
 
     def raise_for_status(self) -> None:
         return None
+
+
+def _install_post(monkeypatch, post) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = post(
+            str(request.url),
+            json=json.loads(request.content),
+            timeout=request.extensions["timeout"]["read"],
+        )
+        return httpx.Response(200, json=response._payload, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(stac_server, "_client", lambda: client)
 
 
 def _catalog_with_item(item: pystac.Item) -> pystac.Catalog:
@@ -60,9 +75,8 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
         "properties": properties,
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -140,7 +154,7 @@ def test_stac_server_follows_next_link_to_resolve_later_item(monkeypatch):
         calls.append((url, json))
         return _Response(pages[len(calls) - 1])
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     resolved = stac_server.resolve_cid_from_stac_server(
         collection=collection,
@@ -171,9 +185,8 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
         "collection": "chirps",
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -217,9 +230,8 @@ def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch)
         "collection": "chirps",
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -276,7 +288,7 @@ def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     assert (
         stac_server.resolve_cid_from_stac_server(

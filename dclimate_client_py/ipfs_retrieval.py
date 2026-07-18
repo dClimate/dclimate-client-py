@@ -12,8 +12,6 @@ from typing import Any
 
 import aiohttp
 import httpx
-import requests
-import urllib3
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
@@ -152,9 +150,6 @@ def _is_connection_error(exc: Exception) -> bool:
         TimeoutError,
         socket.gaierror,
         socket.herror,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        urllib3.exceptions.MaxRetryError,
         httpx.TransportError,
         aiohttp.ClientConnectionError,
         aiohttp.ServerTimeoutError,

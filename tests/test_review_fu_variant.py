@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 
+import httpx
 import pystac
 import pytest
 import xarray as xr
@@ -25,6 +27,19 @@ class _Response:
 
     def raise_for_status(self) -> None:
         return None
+
+
+def _install_post(monkeypatch, post) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = post(
+            str(request.url),
+            json=json.loads(request.content),
+            timeout=request.extensions["timeout"]["read"],
+        )
+        return httpx.Response(200, json=response._payload, request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(stac_server, "_client", lambda: client)
 
 
 def _feature(variant: str, cid: str) -> dict[str, Any]:
@@ -85,9 +100,8 @@ def _cid(result: Any) -> str:
 
 
 async def test_load_dataset_reports_variant_selected_by_stac_server(monkeypatch):
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response(
             {
                 "features": [
@@ -163,9 +177,8 @@ async def test_direct_cid_without_variant_uses_unknown_consistently(monkeypatch)
 
 
 async def test_explicit_variant_is_preserved_in_loaded_metadata(monkeypatch):
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response(
             {"features": [_feature("latest", "bafy-latest")]}
         ),
@@ -217,7 +230,7 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
             raise AssertionError("default on page one should stop pagination")
         return _Response(first_page_with_default)
 
-    monkeypatch.setattr(stac_server.requests, "post", post_default_page)
+    _install_post(monkeypatch, post_default_page)
     page_one_default = stac_server.resolve_cid_from_stac_server(
         COLLECTION,
         DATASET,
@@ -256,7 +269,7 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
         calls.append(json)
         return _Response(pages[len(calls) - 1])
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     resolved = stac_server.resolve_cid_from_stac_server(
         COLLECTION,
@@ -270,9 +283,8 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
 
 
 def test_resolvers_return_cid_and_selected_variant(monkeypatch):
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response(
             {
                 "features": [
@@ -314,9 +326,8 @@ def test_no_variant_prefers_default_over_final(monkeypatch):
         _feature("final", "bafy-final"),
         _feature("default", "bafy-default"),
     ]
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": features}),
     )
 
@@ -337,9 +348,8 @@ def test_no_variant_first_match_fallback_reports_actual_variant(monkeypatch):
         _feature("raw", "bafy-raw"),
         _feature("experimental", "bafy-experimental"),
     ]
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": features}),
     )
 
@@ -356,9 +366,8 @@ def test_no_variant_first_match_fallback_reports_actual_variant(monkeypatch):
 def test_empty_string_variant_is_treated_as_explicit(monkeypatch):
     # Deliberate edge: variant="" is an explicit (unresolvable) variant,
     # not "no variant"; it must raise rather than run the cascade.
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response(
             {"features": [_feature("latest", "bafy-latest")]}
         ),

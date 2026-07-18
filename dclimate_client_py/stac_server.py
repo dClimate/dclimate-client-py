@@ -7,10 +7,11 @@ which is faster than traversing the IPFS-hosted catalog structure.
 
 from collections.abc import Iterator
 from json import dumps
+from threading import Lock
 from typing import Any, Dict, NamedTuple, Optional, Set
 from urllib.parse import urljoin
 
-import requests
+import httpx
 
 from .datasets import SpatialExtent, TemporalExtent
 
@@ -18,6 +19,18 @@ STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
 
 _MAX_SEARCH_PAGES = 50
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = Lock()
+
+
+def _client() -> httpx.Client:
+    """Return the process-wide pooled client used for synchronous STAC calls."""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        with _HTTP_CLIENT_LOCK:
+            if _HTTP_CLIENT is None:
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+    return _HTTP_CLIENT
 
 
 class ResolvedDataset(NamedTuple):
@@ -126,9 +139,9 @@ def _search_pages(
         seen.add(page_key)
 
         if method == "POST":
-            response = requests.post(url, json=request_body, timeout=timeout)
+            response = _client().post(url, json=request_body, timeout=timeout)
         else:
-            response = requests.get(url, params=request_body or None, timeout=timeout)
+            response = _client().get(url, params=request_body or None, timeout=timeout)
         response.raise_for_status()
         page = response.json()
         yield page
@@ -188,7 +201,7 @@ def resolve_cid_from_stac_server(
 
     Raises:
         ValueError: If dataset or variant is not found
-        requests.HTTPError: If the server request fails
+        httpx.HTTPError: If the server request fails
     """
     # Search by collection
     body = {
@@ -288,7 +301,7 @@ def list_available_datasets_from_stac_server(
       disagree.
     - Search pagination is bounded to avoid looping on malformed ``next`` links.
     """
-    collections_resp = requests.get(f"{server_url}/collections", timeout=10)
+    collections_resp = _client().get(f"{server_url}/collections", timeout=10)
     collections_resp.raise_for_status()
     collections_body = collections_resp.json()
 
