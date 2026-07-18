@@ -1,0 +1,76 @@
+from typing import Any
+
+import pytest
+
+import dclimate_client_py.stac_server as stac_server
+
+
+@pytest.fixture(autouse=True)
+def check_ipfs_connection():
+    """Keep these regression tests independent of the local IPFS gateway."""
+    pass
+
+
+class _Response:
+    def __init__(self, payload: dict[str, Any]):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        pass
+
+
+def _mock_search(monkeypatch, features):
+    def post(url, *, json, timeout):
+        assert url == "https://stac.example/search"
+        assert json == {"limit": 100, "collections": ["ecmwf_era5"]}
+        assert timeout == 10
+        return _Response({"features": features})
+
+    monkeypatch.setattr(stac_server.requests, "post", post)
+
+
+def test_resolve_variant_falls_back_to_variant_encoded_in_item_id(monkeypatch):
+    _mock_search(
+        monkeypatch,
+        [
+            {
+                "id": "ecmwf_era5-temperature-finalized",
+                "collection": "ecmwf_era5",
+                "properties": {"dclimate:dataset_id": "temperature"},
+                "assets": {"data": {"href": "ipfs://bafy-temperature-finalized"}},
+            }
+        ],
+    )
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "temperature",
+        variant="finalized",
+        server_url="https://stac.example",
+    )
+
+    assert cid == "bafy-temperature-finalized"
+
+
+def test_resolve_feature_without_properties(monkeypatch):
+    _mock_search(
+        monkeypatch,
+        [
+            {
+                "id": "ecmwf_era5-temperature",
+                "collection": "ecmwf_era5",
+                "assets": {"data": {"href": "ipfs://bafy-temperature"}},
+            }
+        ],
+    )
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "temperature",
+        server_url="https://stac.example",
+    )
+
+    assert cid == "bafy-temperature"
