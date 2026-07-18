@@ -17,7 +17,7 @@ class TestGetRootCatalogCid:
 
     def test_get_root_catalog_cid_returns_string(self):
         """Test that get_root_catalog_cid returns a non-empty string CID."""
-        cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        cid = stac_catalog.get_root_catalog_cid()
 
         assert isinstance(cid, str)
         assert len(cid) > 0
@@ -26,8 +26,8 @@ class TestGetRootCatalogCid:
 
     def test_get_root_catalog_cid_consistent(self):
         """Test that multiple calls return consistent CID format."""
-        cid1 = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
-        cid2 = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        cid1 = stac_catalog.get_root_catalog_cid()
+        cid2 = stac_catalog.get_root_catalog_cid()
 
         # Both should be valid CIDs
         assert isinstance(cid1, str)
@@ -63,7 +63,7 @@ class TestIPFSStacIO:
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get a real CID from the catalog
-        root_cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        root_cid = stac_catalog.get_root_catalog_cid()
         ipfs_uri = f"ipfs://{root_cid}"
 
         # Read the content
@@ -85,7 +85,7 @@ class TestIPFSStacIO:
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get a real CID to test with
-        root_cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        root_cid = stac_catalog.get_root_catalog_cid()
 
         # Test that ipfs:// URI is handled
         ipfs_uri = f"ipfs://{root_cid}"
@@ -108,7 +108,7 @@ class TestIPFSStacIO:
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get root CID and load catalog
-        root_cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        root_cid = stac_catalog.get_root_catalog_cid()
         ipfs_uri = f"ipfs://{root_cid}"
 
         # First read
@@ -149,7 +149,7 @@ class TestLoadStacCatalog:
     def test_load_catalog_with_explicit_cid(self):
         """Test loading catalog with explicitly provided CID."""
         gateway_url = IPFS_GATEWAY_URL
-        root_cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        root_cid = stac_catalog.get_root_catalog_cid()
 
         catalog = stac_catalog.load_stac_catalog(gateway_url, root_cid=root_cid)
 
@@ -435,7 +435,7 @@ class TestIntegrationEndToEnd:
     def test_full_workflow_load_and_resolve(self):
         """Test the complete workflow: get CID, load catalog, resolve dataset."""
         # Step 1: Get root catalog CID
-        root_cid = stac_catalog.get_root_catalog_cid(IPFS_GATEWAY_URL)
+        root_cid = stac_catalog.get_root_catalog_cid()
         assert isinstance(root_cid, str)
 
         # Step 2: Load catalog

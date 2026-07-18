@@ -19,16 +19,11 @@ from .stac_server import (
 logger = logging.getLogger(__name__)
 
 
-def get_root_catalog_cid(
-    gateway_url: str = "https://ipfs-gateway.dclimate.net",
-) -> str:
+def get_root_catalog_cid() -> str:
     """
     Get the root STAC catalog CID.
 
     Fetches the latest catalog CID from the dClimate IPFS gateway API.
-
-    Args:
-        gateway_url: Base URL of the IPFS gateway exposing the ``/stac`` pointer.
 
     Returns:
         str: The IPFS CID of the root STAC catalog
@@ -37,7 +32,7 @@ def get_root_catalog_cid(
         requests.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
-    url = f"{gateway_url.rstrip('/')}/stac"
+    url = "https://ipfs-gateway.dclimate.net/stac"
     response = requests.get(url, timeout=30)
     response.raise_for_status()
     data = response.json()
@@ -190,7 +185,7 @@ def load_stac_catalog(
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:
-        root_cid = get_root_catalog_cid(gateway_url)
+        root_cid = get_root_catalog_cid()
 
     # Bind the I/O handler to this catalog. Avoid pystac's process-global
     # default, because concurrent clients may use different gateways.
