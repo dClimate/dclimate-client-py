@@ -67,3 +67,54 @@ def test_resolve_feature_without_properties(monkeypatch):
     )
 
     assert cid == "bafy-temperature"
+
+
+def test_resolve_default_variant_matches_bare_item_id(monkeypatch):
+    # list_available_datasets_from_stac_server reports items without a
+    # variant segment as variant "default"; resolve must accept the same
+    # name so a list -> resolve round-trip works.
+    _mock_search(
+        monkeypatch,
+        [
+            {
+                "id": "ecmwf_era5-temperature",
+                "collection": "ecmwf_era5",
+                "assets": {"data": {"href": "ipfs://bafy-temperature"}},
+            }
+        ],
+    )
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "temperature",
+        variant="default",
+        server_url="https://stac.example",
+    )
+
+    assert cid == "bafy-temperature"
+
+
+def test_resolve_without_variant_prefers_unnamed_item_over_latest(monkeypatch):
+    _mock_search(
+        monkeypatch,
+        [
+            {
+                "id": "ecmwf_era5-temperature-latest",
+                "collection": "ecmwf_era5",
+                "assets": {"data": {"href": "ipfs://bafy-temperature-latest"}},
+            },
+            {
+                "id": "ecmwf_era5-temperature",
+                "collection": "ecmwf_era5",
+                "assets": {"data": {"href": "ipfs://bafy-temperature"}},
+            },
+        ],
+    )
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "ecmwf_era5",
+        "temperature",
+        server_url="https://stac.example",
+    )
+
+    assert cid == "bafy-temperature"

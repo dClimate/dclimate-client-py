@@ -176,6 +176,11 @@ def resolve_cid_from_stac_server(
         "collections": [collection],
     }
 
+    # An item with no variant segment/property is what the listing API
+    # reports as the "default" variant — keep resolve symmetric with list.
+    def _effective_variant(feature: Dict[str, Any]) -> str:
+        return _feature_variant(feature, collection, dataset) or "default"
+
     matches = []
     for page in _search_pages(server_url, body, timeout=10):
         # Filter to the exact dataset. A prefix match would conflate datasets such
@@ -187,8 +192,7 @@ def resolve_cid_from_stac_server(
         ]
         matches.extend(page_matches)
         if variant and any(
-            _feature_variant(feature, collection, dataset) == variant
-            for feature in page_matches
+            _effective_variant(feature) == variant for feature in page_matches
         ):
             break
         if variant is None and page_matches:
@@ -199,11 +203,7 @@ def resolve_cid_from_stac_server(
     # Select by variant or use default preference
     if variant:
         item = next(
-            (
-                f
-                for f in matches
-                if _feature_variant(f, collection, dataset) == variant
-            ),
+            (f for f in matches if _effective_variant(f) == variant),
             None,
         )
         if not item:
@@ -215,11 +215,7 @@ def resolve_cid_from_stac_server(
         item = matches[0]
         for preferred in ["default", "final", "finalized", "latest"]:
             found = next(
-                (
-                    f
-                    for f in matches
-                    if _feature_variant(f, collection, dataset) == preferred
-                ),
+                (f for f in matches if _effective_variant(f) == preferred),
                 None,
             )
             if found:

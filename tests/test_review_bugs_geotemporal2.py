@@ -2,8 +2,10 @@ import copy
 import warnings
 
 import numpy as np
+import pytest
 import xarray as xr
 
+from dclimate_client_py import dclimate_zarr_errors as errors
 from dclimate_client_py.geotemporal_data import GeotemporalData
 
 
@@ -77,3 +79,11 @@ def test_temporal_aggregation_quarter_uses_supported_alias_without_warning():
         and "'Q'" in str(warning.message)
     ]
     assert deprecated_q_warnings == []
+
+
+def test_check_dataset_size_counts_scalar_dataset_as_one_point():
+    dataset = xr.Dataset({"temperature": xr.DataArray(12.5)})
+    data = GeotemporalData(dataset, "static-temperature")
+
+    with pytest.raises(errors.SelectionTooLargeError):
+        data.check_dataset_size(point_limit=0)
