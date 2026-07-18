@@ -717,7 +717,7 @@ class GeotemporalData:
 
     def query(
         self,
-        forecast_reference_time: datetime.datetime = None,
+        forecast_reference_time: typing.Union[str, datetime.datetime, None] = None,
         point_kwargs: dict = None,
         circle_kwargs: dict = None,
         rectangle_kwargs: dict = None,

@@ -5,7 +5,7 @@
 </p>
 
 # dClimate-Client-Py
-[![codecov](https://codecov.io/gh/dClimate/dClimate-Zarr-Client/graph/badge.svg?token=AovaMO6DX5)](https://codecov.io/gh/dClimate/dClimate-Zarr-Client)
+[![codecov](https://codecov.io/gh/dClimate/dclimate-client-py/graph/badge.svg)](https://codecov.io/gh/dClimate/dclimate-client-py)
 
 Retrieve dClimate GIS zarr datasets stored on IPFS
 
@@ -226,11 +226,11 @@ Various exceptions to be raised for bad or invalid user input.
 
 ---
 
-### geo_utils.py
+### geotemporal_data.py
 
-Functions to manipulate `xarray` datasets. Contains polygon, rectangle, circle and point spatial
-subsetting options, as well as temporal subsetting. Also allows for both spatial and temporal
-aggregations.
+`GeotemporalData`, a wrapper around `xarray` datasets. Contains polygon, rectangle, circle and
+point spatial subsetting options, as well as temporal subsetting. Also allows for both spatial
+and temporal aggregations.
 
 ---
 
