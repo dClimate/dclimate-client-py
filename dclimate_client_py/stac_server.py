@@ -7,8 +7,7 @@ which is faster than traversing the IPFS-hosted catalog structure.
 
 from collections.abc import Iterator
 from json import dumps
-import typing
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, NamedTuple, Optional, Set
 from urllib.parse import urljoin
 
 import requests
@@ -21,7 +20,7 @@ STAC_SERVER_URL = "https://api.stac.dclimate.net"
 _MAX_SEARCH_PAGES = 50
 
 
-class ResolvedDataset(typing.NamedTuple):
+class ResolvedDataset(NamedTuple):
     cid: str
     variant: str
 
@@ -173,7 +172,8 @@ def resolve_cid_from_stac_server(
     """
     Resolve dataset CID via STAC server /search API.
 
-    Changed in 0.6: returns ResolvedDataset.
+    Changed in 0.6: returns ResolvedDataset; variant='' is treated as an
+    explicit (unresolvable) variant rather than no-variant.
 
     Uses the same API format as the frontend (POST /search with collections filter).
 

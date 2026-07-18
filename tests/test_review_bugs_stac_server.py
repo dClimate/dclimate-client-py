@@ -46,6 +46,7 @@ def test_resolve_variant_falls_back_to_variant_encoded_in_item_id(monkeypatch):
     )
 
     assert resolved.cid == "bafy-temperature-finalized"
+    assert resolved.variant == "finalized"
 
 
 def test_resolve_feature_without_properties(monkeypatch):
@@ -67,6 +68,7 @@ def test_resolve_feature_without_properties(monkeypatch):
     )
 
     assert resolved.cid == "bafy-temperature"
+    assert resolved.variant == "default"
 
 
 def test_resolve_default_variant_matches_bare_item_id(monkeypatch):
@@ -92,6 +94,7 @@ def test_resolve_default_variant_matches_bare_item_id(monkeypatch):
     )
 
     assert resolved.cid == "bafy-temperature"
+    assert resolved.variant == "default"
 
 
 def test_resolve_without_variant_prefers_unnamed_item_over_latest(monkeypatch):
@@ -118,3 +121,4 @@ def test_resolve_without_variant_prefers_unnamed_item_over_latest(monkeypatch):
     )
 
     assert resolved.cid == "bafy-temperature"
+    assert resolved.variant == "default"

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pystac
+import pytest
 import xarray as xr
 
 import dclimate_client_py.dclimate_client as dclimate_client_module
@@ -223,6 +224,7 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
         server_url="https://stac.example",
     )
     assert _cid(page_one_default) == "bafy-default"
+    assert page_one_default.variant == "default"
     assert default_page_calls == 1
 
     pages = [
@@ -263,6 +265,7 @@ def test_no_variant_search_paginates_to_preferred_default(monkeypatch):
     )
 
     assert _cid(resolved) == "bafy-default"
+    assert resolved.variant == "default"
     assert len(calls) == 2
 
 
@@ -297,8 +300,74 @@ def test_resolvers_return_cid_and_selected_variant(monkeypatch):
     )
 
     assert all(
-        hasattr(resolved, "cid") and hasattr(resolved, "variant")
+        isinstance(resolved, stac_server.ResolvedDataset)
         for resolved in (server_resolved, catalog_resolved)
     )
     assert server_resolved.cid == catalog_resolved.cid == "bafy-final"
     assert server_resolved.variant == catalog_resolved.variant == "final"
+
+
+def test_no_variant_prefers_default_over_final(monkeypatch):
+    # Mutation-survivor pin: swapping "default"/"final" in the preference
+    # cascade must fail this test.
+    features = [
+        _feature("final", "bafy-final"),
+        _feature("default", "bafy-default"),
+    ]
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response({"features": features}),
+    )
+
+    resolved = stac_server.resolve_cid_from_stac_server(
+        COLLECTION,
+        DATASET,
+        server_url="https://stac.example",
+    )
+
+    assert resolved.cid == "bafy-default"
+    assert resolved.variant == "default"
+
+
+def test_no_variant_first_match_fallback_reports_actual_variant(monkeypatch):
+    # No preferred variant exists: the first match wins and its OWN
+    # effective variant is reported, never a fabricated "default".
+    features = [
+        _feature("raw", "bafy-raw"),
+        _feature("experimental", "bafy-experimental"),
+    ]
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response({"features": features}),
+    )
+
+    resolved = stac_server.resolve_cid_from_stac_server(
+        COLLECTION,
+        DATASET,
+        server_url="https://stac.example",
+    )
+
+    assert resolved.cid == "bafy-raw"
+    assert resolved.variant == "raw"
+
+
+def test_empty_string_variant_is_treated_as_explicit(monkeypatch):
+    # Deliberate edge: variant="" is an explicit (unresolvable) variant,
+    # not "no variant"; it must raise rather than run the cascade.
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response(
+            {"features": [_feature("latest", "bafy-latest")]}
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Variant ''"):
+        stac_server.resolve_cid_from_stac_server(
+            COLLECTION,
+            DATASET,
+            variant="",
+            server_url="https://stac.example",
+        )
