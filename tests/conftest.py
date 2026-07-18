@@ -189,8 +189,10 @@ def is_ipfs_rpc_running(rpc_url: str) -> bool:
     """Check whether the writable Kubo RPC API is responsive."""
     try:
         response = requests.post(f"{rpc_url}/api/v0/id", timeout=5)
-        return response.status_code < 500
-    except requests.exceptions.RequestException:
+        response.raise_for_status()
+        payload = response.json()
+        return isinstance(payload, dict) and bool(payload.get("ID"))
+    except (requests.exceptions.RequestException, ValueError):
         return False
 
 

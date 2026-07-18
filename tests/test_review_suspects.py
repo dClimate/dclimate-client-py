@@ -460,3 +460,20 @@ def test_catalog_lister_uses_dataset_metadata_for_partial_item_properties():
     assert variant["dataset"] == "precip-daily"
     assert variant["variant"] == "final-p05"
     assert variant["cid"] == "bafy-partial-catalog"
+
+
+def test_catalog_lister_keeps_bare_item_with_default_variant_property():
+    item = pystac.Item(
+        id="chirps-precip-daily",
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={"dclimate:variant": "default"},
+    )
+    item.add_asset("data", pystac.Asset(href="ipfs://bafy-bare-default-catalog"))
+
+    listing = stac_catalog.list_available_datasets(_catalog_with_item(item))
+    variant = listing["chirps"]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "default"

@@ -225,6 +225,69 @@ def test_partial_properties_use_dataset_hint_and_asset_cid(monkeypatch):
     assert variant["cid"] == "bafy-partial-properties"
 
 
+def test_variant_only_property_keeps_bare_hyphenated_dataset(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={
+            "collections": [
+                {
+                    "id": "chirps",
+                    "title": "CHIRPS",
+                    "dclimate:types": ["precip-daily"],
+                }
+            ]
+        },
+        search_body={
+            "features": [
+                {
+                    "id": "chirps-precip-daily",
+                    "collection": "chirps",
+                    "properties": {"dclimate:variant": "default"},
+                }
+            ]
+        },
+    )
+
+    variant = list_available_datasets_from_stac_server("https://example.test")[
+        "chirps"
+    ]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "default"
+
+
+def test_unknown_collection_uses_explicit_sibling_dataset_hints(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={"collections": []},
+        search_body={
+            "features": [
+                {
+                    "id": "new_coll-precip-daily-final-p05",
+                    "collection": "new_coll",
+                    "properties": {},
+                },
+                {
+                    "id": "new_coll-precip-daily-prelim-p05",
+                    "collection": "new_coll",
+                    "properties": {
+                        "dclimate:dataset_id": "precip-daily",
+                        "dclimate:variant": "prelim-p05",
+                    },
+                },
+            ]
+        },
+    )
+
+    listing = list_available_datasets_from_stac_server("https://example.test")
+
+    assert listing["new_coll"]["types"] == ["precip-daily"]
+    assert {variant["variant"] for variant in listing["new_coll"]["variants"]} == {
+        "final-p05",
+        "prelim-p05",
+    }
+
+
 def test_category_unanimous_only(monkeypatch):
     """When items in a collection disagree on observation, category is dropped."""
     _install_mocks(

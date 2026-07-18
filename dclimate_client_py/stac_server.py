@@ -373,6 +373,7 @@ def list_available_datasets_from_stac_server(
         for page in _search_pages(server_url, {"limit": 100}, timeout=15)
         for feature in page.get("features", []) or []
     ]
+    dataset_hints: Dict[str, Set[str]] = {}
     for feature in search_features:
         collection_id = feature.get("collection")
         props = feature.get("properties") or {}
@@ -381,9 +382,12 @@ def list_available_datasets_from_stac_server(
             isinstance(collection_id, str)
             and isinstance(dataset_id, str)
             and dataset_id
-            and collection_id in accumulators
         ):
-            accumulators[collection_id]["known_datasets"].add(dataset_id)
+            dataset_hints.setdefault(collection_id, set()).add(dataset_id)
+
+    for collection_id, hints in dataset_hints.items():
+        if collection_id in accumulators:
+            accumulators[collection_id]["known_datasets"].update(hints)
 
     for feature in search_features:
         feature_id = feature.get("id", "")
@@ -404,7 +408,7 @@ def list_available_datasets_from_stac_server(
                 "organization": organization,
                 "observations": set(),
                 "datasets": {},
-                "known_datasets": set(),
+                "known_datasets": set(dataset_hints.get(collection_id, set())),
             }
             accumulators[collection_id] = entry
 
@@ -427,6 +431,11 @@ def list_available_datasets_from_stac_server(
             parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
                 feature_id, collection_id, variant=property_variant
             )
+            if parsed_dataset is None:
+                parsed_dataset, _ = _dataset_and_variant_from_known_datasets(
+                    feature_id, collection_id, entry["known_datasets"]
+                )
+                parsed_variant = property_variant
         else:
             parsed_dataset, parsed_variant = _dataset_and_variant_from_known_datasets(
                 feature_id, collection_id, entry["known_datasets"]

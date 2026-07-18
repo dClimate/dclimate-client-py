@@ -508,6 +508,14 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                                         variant=property_variant,
                                     )
                                 )
+                                if parsed_dataset is None:
+                                    parsed_dataset, parsed_variant = (
+                                        _dataset_and_variant_from_known_datasets(
+                                            item.id,
+                                            collection_id,
+                                            known_datasets,
+                                        )
+                                    )
                             else:
                                 parsed_dataset, parsed_variant = (
                                     _dataset_and_variant_from_known_datasets(

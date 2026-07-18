@@ -38,9 +38,7 @@ dependencies = [
     # while py-hamt 3.x currently constrains zarr below 3.1.
     "numcodecs[crc32c]>=0.14,<0.16",
     "numpy>=2.1.3",
-    # Immutable source pin for the unreleased py-hamt fixes required here.
-    # Replace with a normal version constraint once these land in a release.
-    "py_hamt @ git+https://github.com/dClimate/py-hamt@942580df089be13d6b8b803fc942932d65f2fc7f",
+    "py_hamt>=3.4.1",
     "multiformats>=0.3.1",
     "requests>=2.31.0",
     "urllib3>=2.0.0",
@@ -65,6 +63,11 @@ Homepage = "https://dclimate.net/"
 testing = ["pytest", "pytest-cov", "pytest-mock", "pytest-asyncio>=1.3.0"]
 dev = ["pre-commit>=4.1.0", "ruff>=0.9.5"]
 examples = ["python-dotenv>=1.0.0"]
+
+[tool.uv.sources]
+# Development integration pin for py-hamt PR #88. Published artifacts retain
+# the released runtime floor because PyPI rejects direct-URL requirements.
+py_hamt = { git = "https://github.com/dClimate/py-hamt", rev = "942580df089be13d6b8b803fc942932d65f2fc7f" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

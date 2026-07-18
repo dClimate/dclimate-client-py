@@ -10,6 +10,8 @@ import subprocess
 
 import pytest
 
+import tests.conftest as suite_conftest
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 META_TEST_ENV = "DCLIMATE_META_TEST"
@@ -115,3 +117,32 @@ def test_debug_tests_contain_a_real_assertion():
     tree = ast.parse(debug_test.read_text(encoding="utf-8"), filename=str(debug_test))
     assertions = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
     assert assertions, "tests/test_debug.py contains no assert statements"
+
+
+@pytest.mark.parametrize(
+    ("status", "payload", "expected"),
+    [
+        (200, {"ID": "12D3KooWTest"}, True),
+        (200, {}, False),
+        (404, {}, False),
+        (200, ValueError("invalid JSON"), False),
+    ],
+)
+def test_ipfs_rpc_probe_requires_successful_kubo_identity(
+    monkeypatch, status, payload, expected
+):
+    class Response:
+        def raise_for_status(self):
+            if status >= 400:
+                raise suite_conftest.requests.HTTPError(f"HTTP {status}")
+
+        def json(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    monkeypatch.setattr(
+        suite_conftest.requests, "post", lambda *args, **kwargs: Response()
+    )
+
+    assert suite_conftest.is_ipfs_rpc_running("https://rpc.example") is expected
