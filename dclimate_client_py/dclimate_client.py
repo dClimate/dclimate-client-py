@@ -115,11 +115,25 @@ class dClimateClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Clean up KuboCAS when exiting async context."""
-        if self._siren_client is not None:
-            await self._siren_client.aclose()
-        if self._kubo_cas:
-            await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
-            self._kubo_cas = None
+        siren_error: BaseException | None = None
+        try:
+            if self._siren_client is not None:
+                await self._siren_client.aclose()
+        except BaseException as error:
+            siren_error = error
+        finally:
+            try:
+                if self._kubo_cas is not None:
+                    await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
+            except BaseException as kubo_error:
+                if siren_error is not None:
+                    raise siren_error from kubo_error
+                raise
+            finally:
+                self._kubo_cas = None
+
+        if siren_error is not None:
+            raise siren_error
 
     @staticmethod
     def _apply_zarr_group_metadata(ds: xr.Dataset, metadata: DatasetMetadata) -> None:

@@ -203,7 +203,7 @@ class GeotemporalData:
             data = self.data.sel(selection, method="nearest")
         else:
             try:
-                data = self.data.sel(selection, method="nearest", tolerance=10e-5)
+                data = self.data.sel(selection, method="nearest", tolerance=1e-5)
             except KeyError:
                 raise errors.NoDataFoundError(
                     "User requested not to snap_to_grid, but exact coord not in dataset"
@@ -226,7 +226,7 @@ class GeotemporalData:
         else:
             try:
                 data = self.data.sel(
-                    latitude=lats, longitude=lons, method="nearest", tolerance=10e-5
+                    latitude=lats, longitude=lons, method="nearest", tolerance=1e-5
                 )
             except KeyError:
                 raise errors.NoDataFoundError(
