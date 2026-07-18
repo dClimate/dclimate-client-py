@@ -406,18 +406,27 @@ class GeotemporalData:
 
         import geopandas as gpd
 
+        # Normalize the mask before comparing areas or selecting a fallback
+        # point. Dataset coordinates are WGS84; using projected coordinates
+        # here would otherwise compare square metres with square degrees and
+        # pass metre-valued centroids to latitude/longitude selection.
+        mask = gpd.GeoSeries(polygons_mask, crs=epsg_crs).to_crs(4326)
+        normalized_polygons = mask.array
+
         # If the polygon(s) are collectively smaller than the size of one grid cell,
         # clipping will return no data In this case return data from the grid cell nearest
         # to the center of the polygon
-        if self.data.attrs["spatial resolution"] ** 2 > polygons_mask.union_all().area:
-            return self.reduce_polygon_to_point(polygons_mask)
+        if (
+            self.data.attrs["spatial resolution"] ** 2
+            > normalized_polygons.union_all().area
+        ):
+            return self.reduce_polygon_to_point(normalized_polygons)
 
         # return clipped data as normal if the polygons are large enough
         spatial_data = self.data.rio.set_spatial_dims(
             x_dim="longitude", y_dim="latitude", inplace=False
         )
         spatial_data = spatial_data.rio.write_crs("epsg:4326")
-        mask = gpd.geoseries.GeoSeries(polygons_mask).set_crs(epsg_crs).to_crs(4326)
         min_lon, min_lat, max_lon, max_lat = mask.total_bounds
         box_ds = (
             self._new(spatial_data).rectangle(min_lat, min_lon, max_lat, max_lon).data
@@ -426,7 +435,7 @@ class GeotemporalData:
         try:
             shaped_ds = box_ds.rio.clip(mask, 4326, drop=True)
         except rioxarray.exceptions.NoDataInBounds:
-            return self.reduce_polygon_to_point(polygons_mask)
+            return self.reduce_polygon_to_point(normalized_polygons)
 
         data_var = list(shaped_ds.data_vars)[0]
         if "grid_mapping" in shaped_ds[data_var].attrs:
@@ -675,7 +684,12 @@ class GeotemporalData:
             if bad_key in ds.attrs:
                 del ds.attrs[bad_key]
 
-        return ds.to_netcdf(*args, **kwargs)
+        serialized = ds.to_netcdf(*args, **kwargs)
+        # xarray 2025.09+ returns a memoryview for in-memory serialization,
+        # while this public wrapper has always promised bytes.
+        if isinstance(serialized, memoryview):
+            return serialized.tobytes()
+        return serialized
 
     def as_dict(self) -> dict:
         """Prepares dict containing metadata and values from dataset

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pystac
+import pytest
 
 from dclimate_client_py import ipfs_retrieval, stac_catalog, stac_server
 
@@ -289,3 +290,173 @@ def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
     )
     assert bodies[1]["token"] == "page-2"
     assert bodies[1]["collections"] == ["chirps"]
+
+
+def test_stac_server_merge_next_link_without_body_keeps_original_body_and_headers(
+    monkeypatch,
+):
+    calls = []
+
+    def post(url, json=None, timeout=None, headers=None):
+        calls.append({"url": url, "json": json, "headers": headers})
+        if len(calls) == 1:
+            return _Response(
+                {
+                    "features": [{"id": "chirps-other"}],
+                    "links": [
+                        {
+                            "rel": "next",
+                            "href": "/search",
+                            "method": "POST",
+                            "merge": True,
+                            "headers": {"Authorization": "Bearer page-two"},
+                        }
+                    ],
+                }
+            )
+        return _Response({"features": []})
+
+    monkeypatch.setattr(stac_server.requests, "post", post)
+
+    list(
+        stac_server._search_pages(
+            "https://example.test", {"limit": 100, "collections": ["chirps"]}, 10
+        )
+    )
+
+    assert calls[1]["json"] == {"limit": 100, "collections": ["chirps"]}
+    assert calls[1]["headers"] == {"Authorization": "Bearer page-two"}
+
+
+def test_stac_server_default_variant_can_be_on_a_later_page(monkeypatch):
+    pages = [
+        {
+            "features": [
+                {
+                    "id": "chirps-temp-latest",
+                    "collection": "chirps",
+                    "assets": {"data": {"href": "ipfs://bafy-latest"}},
+                }
+            ],
+            "links": [
+                {
+                    "rel": "next",
+                    "href": "/search?page=2",
+                    "method": "POST",
+                    "body": {"page": 2},
+                }
+            ],
+        },
+        {
+            "features": [
+                {
+                    "id": "chirps-temp",
+                    "collection": "chirps",
+                    "assets": {"data": {"href": "ipfs://bafy-default"}},
+                }
+            ]
+        },
+    ]
+    calls = 0
+
+    def post(*args, **kwargs):
+        nonlocal calls
+        response = _Response(pages[calls])
+        calls += 1
+        return response
+
+    monkeypatch.setattr(stac_server.requests, "post", post)
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "chirps", "temp", server_url="https://example.test"
+    )
+
+    assert cid == "bafy-default"
+    assert calls == 2
+
+
+def test_known_hyphenated_dataset_does_not_match_shorter_prefix(monkeypatch):
+    legacy_feature = {
+        "id": "chirps-precip-daily-final-p05",
+        "collection": "chirps",
+        "assets": {"data": {"href": "ipfs://bafy-legacy-hyphenated"}},
+    }
+    explicit_sibling = {
+        "id": "chirps-precip-daily-prelim-p05",
+        "collection": "chirps",
+        "properties": {
+            "dclimate:dataset_id": "precip-daily",
+            "dclimate:variant": "prelim-p05",
+        },
+        "assets": {"data": {"href": "ipfs://bafy-explicit-sibling"}},
+    }
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response(
+            {"features": [legacy_feature, explicit_sibling]}
+        ),
+    )
+
+    with pytest.raises(ValueError, match="No items found"):
+        stac_server.resolve_cid_from_stac_server(
+            "chirps", "precip", server_url="https://example.test"
+        )
+
+    item = pystac.Item(
+        id=legacy_feature["id"],
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={},
+    )
+    item.add_asset("data", pystac.Asset(href="ipfs://bafy-legacy-hyphenated"))
+    catalog = _catalog_with_item(item)
+
+    with pytest.raises(ValueError, match="Dataset 'precip' not found"):
+        stac_catalog.resolve_dataset_cid_from_stac(
+            catalog,
+            collection="chirps",
+            dataset="precip",
+            organization="org",
+        )
+
+
+def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch):
+    observed = {}
+
+    def from_file(cls, href, stac_io=None):
+        observed["href"] = href
+        observed["stac_io"] = stac_io
+        return pystac.Catalog(id="root", description="Root")
+
+    monkeypatch.setattr(pystac.Catalog, "from_file", classmethod(from_file))
+    monkeypatch.setattr(
+        pystac.StacIO,
+        "set_default",
+        lambda *args, **kwargs: pytest.fail("global pystac default was mutated"),
+    )
+
+    stac_catalog.load_stac_catalog("https://gateway-a.test", root_cid="bafy-root")
+
+    assert observed["href"] == "ipfs://bafy-root"
+    assert isinstance(observed["stac_io"], stac_catalog.IPFSStacIO)
+    assert observed["stac_io"].gateway_url == "https://gateway-a.test"
+
+
+def test_catalog_lister_uses_dataset_metadata_for_partial_item_properties():
+    item = pystac.Item(
+        id="chirps-precip-daily-final-p05",
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={"dclimate:dataset_id": "precip-daily"},
+    )
+    item.add_asset("data", pystac.Asset(href="ipfs://bafy-partial-catalog"))
+
+    listing = stac_catalog.list_available_datasets(_catalog_with_item(item))
+    variant = listing["chirps"]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "final-p05"
+    assert variant["cid"] == "bafy-partial-catalog"

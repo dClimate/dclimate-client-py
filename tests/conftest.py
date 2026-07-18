@@ -3,13 +3,14 @@ import itertools
 import pathlib
 
 import geopandas as gpd
-import os
 import numpy as np
 import pytest
 import xarray as xr
 import requests  # Import requests here for the check
 import zarr
 import zarr.storage
+
+from tests.ipfs_config import IPFS_GATEWAY_URL, IPFS_RPC_URL
 
 
 def pytest_addoption(parser):
@@ -28,6 +29,9 @@ def pytest_configure(config):
         "markers",
         "integration: mark test as integration test requiring external services",
     )
+    config.addinivalue_line(
+        "markers", "ipfs_rpc: mark test as requiring a writable IPFS RPC endpoint"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -36,17 +40,24 @@ def pytest_collection_modifyitems(config, items):
     ipfs_items = [item for item in items if "ipfs" in item.keywords]
     skip_ipfs = None
     if ipfs_items:
-        gateway_url = os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
-        if not is_ipfs_running(gateway_url):
+        if not is_ipfs_running(IPFS_GATEWAY_URL):
             skip_ipfs = pytest.mark.skip(
-                reason=f"IPFS gateway not responding at {gateway_url}"
+                reason=f"IPFS gateway not responding at {IPFS_GATEWAY_URL}"
             )
+    ipfs_rpc_items = [item for item in items if "ipfs_rpc" in item.keywords]
+    skip_ipfs_rpc = None
+    if ipfs_rpc_items and not is_ipfs_rpc_running(IPFS_RPC_URL):
+        skip_ipfs_rpc = pytest.mark.skip(
+            reason=f"IPFS RPC endpoint not responding at {IPFS_RPC_URL}"
+        )
 
     for item in items:
         if "integration" in item.keywords and not config.getoption("--run-integration"):
             item.add_marker(skip_integration)
         if "ipfs" in item.keywords and skip_ipfs is not None:
             item.add_marker(skip_ipfs)
+        if "ipfs_rpc" in item.keywords and skip_ipfs_rpc is not None:
+            item.add_marker(skip_ipfs_rpc)
 
 
 HERE = pathlib.Path(__file__).parent
@@ -58,7 +69,7 @@ SAMPLE_ZARRS = ETC / "sample_zarrs"
 def input_ds():
     # Keeping local fixtures for tests that don't need IPFS loading (like test_geotemporal_data)
     with zarr.storage.ZipStore(ETC / "retrieval_test.zip", mode="r") as in_zarr:
-        return xr.open_zarr(in_zarr, chunks=None).compute()
+        return xr.open_zarr(in_zarr, chunks=None, decode_timedelta=True).compute()
 
 
 @pytest.fixture
@@ -67,7 +78,7 @@ def forecast_ds():
     with zarr.storage.ZipStore(
         ETC / "forecast_retrieval_test.zip", mode="r"
     ) as in_zarr:
-        return xr.open_zarr(in_zarr, chunks=None).compute()
+        return xr.open_zarr(in_zarr, chunks=None, decode_timedelta=True).compute()
 
 
 @pytest.fixture
@@ -171,6 +182,15 @@ def is_ipfs_running(gateway_url: str) -> bool:
         return False
     except requests.exceptions.RequestException as e:
         print(f"IPFS Gateway check failed with unexpected error: {e}")
+        return False
+
+
+def is_ipfs_rpc_running(rpc_url: str) -> bool:
+    """Check whether the writable Kubo RPC API is responsive."""
+    try:
+        response = requests.post(f"{rpc_url}/api/v0/id", timeout=5)
+        return response.status_code < 500
+    except requests.exceptions.RequestException:
         return False
 
 

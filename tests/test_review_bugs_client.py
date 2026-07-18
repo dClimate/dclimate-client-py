@@ -81,3 +81,43 @@ async def test_aexit_closes_kubo_when_siren_close_raises():
 
     kubo_cas.__aexit__.assert_awaited_once_with(None, None, None)
     assert client._kubo_cas is None
+
+
+@pytest.mark.asyncio
+async def test_aexit_body_cancellation_outranks_ordinary_cleanup_error():
+    siren_error = RuntimeError("Siren close failed")
+    client, kubo_cas, siren_client = _client_with_mocks(siren_error=siren_error)
+
+    # __aenter__ replaces the mock, so exercise __aexit__ through a minimal
+    # context wrapper that keeps the prepared cleanup clients.
+    class Context:
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            return await client.__aexit__(exc_type, exc_val, exc_tb)
+
+    async def run_context():
+        async with Context():
+            raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await run_context()
+
+    assert excinfo.value.__context__ is siren_error
+    siren_client.aclose.assert_awaited_once()
+    kubo_cas.__aexit__.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aexit_body_cancellation_keeps_all_cleanup_failures_as_context():
+    siren_error = RuntimeError("Siren close failed")
+    kubo_error = RuntimeError("Kubo close failed")
+    client, _, _ = _client_with_mocks(siren_error=siren_error, kubo_error=kubo_error)
+    incoming = asyncio.CancelledError()
+
+    suppress = await client.__aexit__(asyncio.CancelledError, incoming, None)
+
+    assert suppress is False
+    assert incoming.__context__ is kubo_error
+    assert kubo_error.__context__ is siren_error

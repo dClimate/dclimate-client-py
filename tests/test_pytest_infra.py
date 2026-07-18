@@ -57,6 +57,7 @@ def test_offline_unit_tests_run_without_ipfs_gateway():
         "tests/test_siren.py",
         "-q",
     )
+    assert result.returncode == 0, result.stdout
     passed, skipped = _summary_counts(result.stdout)
 
     assert passed > 0 and skipped == 0, (
@@ -82,6 +83,7 @@ def test_unmarked_async_tests_execute(tmp_path):
         str(PROJECT_ROOT / "pyproject.toml"),
         "-q",
     )
+    assert result.returncode == 0, result.stdout
 
     unsupported_message = "async def functions are not natively supported"
     assert unsupported_message not in result.stdout, result.stdout

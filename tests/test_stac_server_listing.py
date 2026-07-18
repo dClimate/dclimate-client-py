@@ -192,6 +192,39 @@ def test_falls_back_to_id_parsing_when_properties_missing(monkeypatch):
     assert "cid" not in variants[0]
 
 
+def test_partial_properties_use_dataset_hint_and_asset_cid(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={
+            "collections": [
+                {
+                    "id": "chirps",
+                    "title": "CHIRPS",
+                    "dclimate:types": ["precip-daily"],
+                }
+            ]
+        },
+        search_body={
+            "features": [
+                {
+                    "id": "chirps-precip-daily-final-p05",
+                    "collection": "chirps",
+                    "properties": {"dclimate:dataset_id": "precip-daily"},
+                    "assets": {"data": {"href": "ipfs://bafy-partial-properties"}},
+                }
+            ]
+        },
+    )
+
+    variant = list_available_datasets_from_stac_server("https://example.test")[
+        "chirps"
+    ]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "final-p05"
+    assert variant["cid"] == "bafy-partial-properties"
+
+
 def test_category_unanimous_only(monkeypatch):
     """When items in a collection disagree on observation, category is dropped."""
     _install_mocks(

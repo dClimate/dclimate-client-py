@@ -41,15 +41,14 @@ from dclimate_client_py.stac_server import (
     list_available_datasets_from_stac_server,
     STAC_SERVER_URL,
 )
+from tests.ipfs_config import IPFS_GATEWAY_URL
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.ipfs]
 
 
 STAC_URL = os.environ.get("STAC_SERVER_URL", STAC_SERVER_URL)
-PUBLIC_IPFS_GATEWAY = os.environ.get(
-    "DCLIMATE_IPFS_GATEWAY", "https://ipfs-gateway.dclimate.net"
-)
+PUBLIC_IPFS_GATEWAY = IPFS_GATEWAY_URL
 
 
 def _probe(url: str, *, post: bool = False, timeout: float = 10.0) -> bool:

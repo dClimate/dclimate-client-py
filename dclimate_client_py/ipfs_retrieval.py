@@ -222,19 +222,28 @@ def _open_zarr_from_store(
     """Open a Zarr store, choosing a default group for py-hamt v2 pyramids."""
     normalized_group = _normalize_zarr_group(zarr_group)
     if normalized_group is not None:
-        return xr.open_zarr(store=store, group=normalized_group), normalized_group
+        return (
+            xr.open_zarr(store=store, group=normalized_group, decode_timedelta=True),
+            normalized_group,
+        )
 
     if _store_requires_explicit_zarr_group(store):
         for candidate_group in _zarr_group_candidates(store):
-            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+            return (
+                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
+                candidate_group,
+            )
 
     try:
-        return xr.open_zarr(store=store), None
+        return xr.open_zarr(store=store, decode_timedelta=True), None
     except ValueError as exc:
         if not _is_explicit_zarr_group_error(exc):
             raise
         for candidate_group in _zarr_group_candidates(store):
-            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+            return (
+                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
+                candidate_group,
+            )
         raise
 
 
