@@ -258,6 +258,7 @@ def resolve_cid_from_stac_server(
         for dataset_id in [(feature.get("properties") or {}).get("dclimate:dataset_id")]
         if isinstance(dataset_id, str) and dataset_id
     }
+    known_datasets.add(dataset)
     # Filter to the exact dataset. A prefix match would conflate datasets such
     # as ``precip`` and a known hyphenated dataset ``precip-daily``.
     matches = [

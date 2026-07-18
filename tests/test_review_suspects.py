@@ -424,6 +424,40 @@ def test_known_hyphenated_dataset_does_not_match_shorter_prefix(monkeypatch):
         )
 
 
+def test_requested_hyphenated_dataset_is_a_disambiguation_candidate(monkeypatch):
+    features = [
+        {
+            "id": "chirps-precip-daily-final",
+            "collection": "chirps",
+            "properties": {},
+            "assets": {"data": {"href": "ipfs://bafy-precip-daily-final"}},
+        },
+        {
+            "id": "chirps-precip-default",
+            "collection": "chirps",
+            "properties": {
+                "dclimate:dataset_id": "precip",
+                "dclimate:variant": "default",
+            },
+            "assets": {"data": {"href": "ipfs://bafy-precip-default"}},
+        },
+    ]
+    monkeypatch.setattr(
+        stac_server.requests,
+        "post",
+        lambda *args, **kwargs: _Response({"features": features}),
+    )
+
+    cid = stac_server.resolve_cid_from_stac_server(
+        "chirps",
+        "precip-daily",
+        variant="final",
+        server_url="https://example.test",
+    )
+
+    assert cid == "bafy-precip-daily-final"
+
+
 def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch):
     observed = {}
 

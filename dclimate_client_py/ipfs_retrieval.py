@@ -154,7 +154,10 @@ def _is_connection_error(exc: Exception) -> bool:
         socket.herror,
         requests.exceptions.ConnectionError,
         requests.exceptions.Timeout,
-        urllib3.exceptions.MaxRetryError,
+        urllib3.exceptions.NewConnectionError,
+        urllib3.exceptions.ConnectTimeoutError,
+        urllib3.exceptions.ReadTimeoutError,
+        urllib3.exceptions.ProtocolError,
         httpx.TransportError,
         aiohttp.ClientConnectionError,
         aiohttp.ServerTimeoutError,
@@ -163,6 +166,15 @@ def _is_connection_error(exc: Exception) -> bool:
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
+        if isinstance(current, urllib3.exceptions.MaxRetryError):
+            # MaxRetryError also wraps exhausted HTTP-status retries. Those
+            # should take the normal HAMT fallback rather than masquerading
+            # as transport failures.
+            if isinstance(current.reason, urllib3.exceptions.ResponseError):
+                return False
+            if isinstance(current.reason, BaseException):
+                current = current.reason
+                continue
         if isinstance(current, connection_error_types):
             return True
         current = current.__cause__ or current.__context__

@@ -44,7 +44,11 @@ def _chained(wrapper: Exception, cause: Exception) -> Exception:
         requests.ConnectionError("max retries exceeded"),
         requests.Timeout("gateway timed out"),
         httpx.ConnectError("connection refused"),
-        urllib3.exceptions.MaxRetryError(None, "http://gateway", "max retries"),
+        urllib3.exceptions.MaxRetryError(
+            None,
+            "http://gateway",
+            urllib3.exceptions.NewConnectionError(None, "connection refused"),
+        ),
         _chained(RuntimeError("wrapped"), httpx.ReadTimeout("gateway timed out")),
     ],
 )
@@ -60,6 +64,11 @@ def test_is_connection_error_classifies_gateway_failures(error):
         IsADirectoryError("is a directory"),
         ValueError("not a sharded zarr store"),
         requests.HTTPError("500 Server Error: Internal Server Error"),
+        urllib3.exceptions.MaxRetryError(
+            None,
+            "http://gateway",
+            urllib3.exceptions.ResponseError("too many 500 responses"),
+        ),
         _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
     ],
 )

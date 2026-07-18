@@ -232,8 +232,16 @@ class GeotemporalData:
             raise errors.InvalidSelectionError(
                 "points_mask contains missing geometries"
             )
-        lats = xr.DataArray(series.y.to_numpy(), dims="point")
-        lons = xr.DataArray(series.x.to_numpy(), dims="point")
+        if series.is_empty.any():
+            raise errors.InvalidSelectionError("points_mask contains empty geometries")
+        lat_values = series.y.to_numpy()
+        lon_values = series.x.to_numpy()
+        if not np.isfinite(lat_values).all() or not np.isfinite(lon_values).all():
+            raise errors.InvalidSelectionError(
+                "points_mask contains non-finite coordinates"
+            )
+        lats = xr.DataArray(lat_values, dims="point")
+        lons = xr.DataArray(lon_values, dims="point")
 
         if snap_to_grid:
             data = self.data.sel(latitude=lats, longitude=lons, method="nearest")
