@@ -330,6 +330,35 @@ def test_stac_server_merge_next_link_without_body_keeps_original_body_and_header
     assert calls[1]["headers"] == {"Authorization": "Bearer page-two"}
 
 
+def test_stac_server_raises_when_page_limit_would_truncate_results(monkeypatch):
+    monkeypatch.setattr(stac_server, "_MAX_SEARCH_PAGES", 2)
+    calls = 0
+
+    def post(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return _Response(
+            {
+                "features": [{"id": f"chirps-other-{calls}"}],
+                "links": [
+                    {
+                        "rel": "next",
+                        "href": f"/search?page={calls + 1}",
+                        "method": "POST",
+                        "body": {"page": calls + 1},
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(stac_server.requests, "post", post)
+
+    with pytest.raises(ValueError, match="page limit of 2"):
+        list(stac_server._search_pages("https://example.test", {"limit": 100}, 10))
+
+    assert calls == 2
+
+
 def test_stac_server_default_variant_can_be_on_a_later_page(monkeypatch):
     pages = [
         {
@@ -456,6 +485,46 @@ def test_requested_hyphenated_dataset_is_a_disambiguation_candidate(monkeypatch)
     )
 
     assert cid == "bafy-precip-daily-final"
+
+
+def test_catalog_requested_dataset_is_a_disambiguation_candidate():
+    target = pystac.Item(
+        id="chirps-precip-daily-final",
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={},
+    )
+    target.add_asset(
+        "data", pystac.Asset(href="ipfs://bafy-catalog-precip-daily-final")
+    )
+    catalog = _catalog_with_item(target)
+
+    # Simulate incomplete metadata that declares only the shorter sibling.
+    catalog.get_child_links()[0].extra_fields["dclimate:datasets"] = ["chirps/precip"]
+    collection = catalog.get_child("org").get_child("chirps")
+    sibling = pystac.Item(
+        id="chirps-precip-default",
+        geometry=None,
+        bbox=None,
+        datetime=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        properties={
+            "dclimate:dataset_id": "precip",
+            "dclimate:variant": "default",
+        },
+    )
+    sibling.add_asset("data", pystac.Asset(href="ipfs://bafy-catalog-precip"))
+    collection.add_item(sibling)
+
+    cid = stac_catalog.resolve_dataset_cid_from_stac(
+        catalog,
+        collection="chirps",
+        dataset="precip-daily",
+        variant="final",
+        organization="org",
+    )
+
+    assert cid == "bafy-catalog-precip-daily-final"
 
 
 def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch):

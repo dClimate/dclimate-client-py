@@ -210,6 +210,14 @@ def _search_pages(
             request_body = dict(body)
         else:
             request_body = None
+    else:
+        # Reaching the bound with a valid next link means the result is
+        # incomplete. Surface that explicitly so callers can use their
+        # catalog fallback instead of accepting truncated search results.
+        raise ValueError(
+            f"STAC search reached its page limit of {_MAX_SEARCH_PAGES} "
+            "while another next link was present"
+        )
 
 
 def resolve_cid_from_stac_server(

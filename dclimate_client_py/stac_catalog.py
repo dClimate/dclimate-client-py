@@ -311,6 +311,10 @@ def resolve_dataset_cid_from_stac(
         for property_dataset in [(item.properties or {}).get("dclimate:dataset_id")]
         if isinstance(property_dataset, str) and property_dataset
     )
+    # Metadata can be incomplete and mention only a shorter sibling (for
+    # example ``precip`` but not ``precip-daily``). The requested name is
+    # nevertheless a valid parsing hint, matching the STAC-server resolver.
+    known_datasets.add(dataset)
 
     candidates = []
     selected_item = None
