@@ -5,10 +5,13 @@ This module provides functions for loading Zarr datasets from IPFS using KuboCAS
 """
 
 import logging
+import socket
 import time
 import warnings
 from typing import Any
 
+import aiohttp
+import httpx
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
@@ -136,22 +139,31 @@ def _record_span_error(active_span: Span, exc: Exception) -> None:
 
 
 def _is_connection_error(exc: Exception) -> bool:
-    """Classify gateway and network failures from exception text."""
-    text = str(exc).lower()
-    return any(
-        token in text
-        for token in (
-            "connection refused",
-            "connection reset",
-            "max retries exceeded",
-            "name or service not known",
-            "network is unreachable",
-            "nodename nor servname",
-            "temporary failure in name resolution",
-            "timeout",
-            "timed out",
-        )
+    """Classify gateway and network failures by type, including chained causes.
+
+    Deliberately narrower than ``OSError``: filesystem errors such as
+    ``FileNotFoundError``/``PermissionError`` must not masquerade as gateway
+    failures, or the caller would skip the HAMT fallback for them.
+    """
+    connection_error_types = (
+        ConnectionError,
+        TimeoutError,
+        socket.gaierror,
+        socket.herror,
+        httpx.TransportError,
+        aiohttp.ClientConnectionError,
+        aiohttp.ServerTimeoutError,
     )
+    # Note: exhausted HTTP-status retries (httpx.HTTPStatusError) are
+    # deliberately NOT connection errors — they take the HAMT fallback.
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, connection_error_types):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _normalize_zarr_group(zarr_group: str | None) -> str | None:
@@ -207,19 +219,28 @@ def _open_zarr_from_store(
     """Open a Zarr store, choosing a default group for py-hamt v2 pyramids."""
     normalized_group = _normalize_zarr_group(zarr_group)
     if normalized_group is not None:
-        return xr.open_zarr(store=store, group=normalized_group), normalized_group
+        return (
+            xr.open_zarr(store=store, group=normalized_group, decode_timedelta=True),
+            normalized_group,
+        )
 
     if _store_requires_explicit_zarr_group(store):
         for candidate_group in _zarr_group_candidates(store):
-            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+            return (
+                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
+                candidate_group,
+            )
 
     try:
-        return xr.open_zarr(store=store), None
+        return xr.open_zarr(store=store, decode_timedelta=True), None
     except ValueError as exc:
         if not _is_explicit_zarr_group_error(exc):
             raise
         for candidate_group in _zarr_group_candidates(store):
-            return xr.open_zarr(store=store, group=candidate_group), candidate_group
+            return (
+                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
+                candidate_group,
+            )
         raise
 
 

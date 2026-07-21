@@ -1,7 +1,7 @@
 """
 Unit tests for ``list_available_datasets_from_stac_server``.
 
-These are pure unit tests — ``requests.get`` / ``requests.post`` are mocked, so
+These are pure unit tests — ``httpx.MockTransport`` handles all requests, so
 the tests run offline and don't depend on the public STAC server or the IPFS
 gateway. Integration coverage (parity with the IPFS walker) lives in
 ``test_list_datasets_parity.py`` and is gated behind ``--run-integration``.
@@ -11,46 +11,48 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import httpx
 import pytest
-import requests
 
+from dclimate_client_py import stac_server
 from dclimate_client_py.stac_server import (
     list_available_datasets_from_stac_server,
     resolve_cid_from_stac_server,
 )
 
 
-def _mock_response(payload: Dict[str, Any], status: int = 200):
-    """Build a stand-in for a ``requests.Response`` that has ``json()`` and
-    ``raise_for_status()``."""
+_install_mock_client = None
 
-    class _Resp:
-        def __init__(self) -> None:
-            self.status_code = status
 
-        def json(self):
-            return payload
+@pytest.fixture(autouse=True)
+def _use_managed_httpx_clients(install_httpx_mock):
+    global _install_mock_client
+    _install_mock_client = install_httpx_mock
+    yield
+    _install_mock_client = None
 
-        def raise_for_status(self):
-            if status >= 400:
-                raise requests.HTTPError(f"HTTP {status}")
 
-    return _Resp()
+def _mock_response(
+    request: httpx.Request, payload: Dict[str, Any], status: int = 200
+) -> httpx.Response:
+    return httpx.Response(status, json=payload, request=request)
 
 
 def _install_mocks(monkeypatch, *, collections_body, search_body):
-    """Patch requests.get/post to return canned bodies based on URL."""
+    """Inject canned collection/search responses through the client accessor."""
 
-    def fake_get(url, *args, **kwargs):
-        assert url.endswith("/collections"), f"unexpected GET {url}"
-        return _mock_response(collections_body)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            assert request.url.path.endswith("/collections"), (
+                f"unexpected GET {request.url}"
+            )
+            return _mock_response(request, collections_body)
+        assert request.method == "POST"
+        assert request.url.path.endswith("/search"), f"unexpected POST {request.url}"
+        return _mock_response(request, search_body)
 
-    def fake_post(url, *args, **kwargs):
-        assert url.endswith("/search"), f"unexpected POST {url}"
-        return _mock_response(search_body)
-
-    monkeypatch.setattr(requests, "get", fake_get)
-    monkeypatch.setattr(requests, "post", fake_post)
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
 
 SAMPLE_COLLECTIONS = {
@@ -192,6 +194,102 @@ def test_falls_back_to_id_parsing_when_properties_missing(monkeypatch):
     assert "cid" not in variants[0]
 
 
+def test_partial_properties_use_dataset_hint_and_asset_cid(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={
+            "collections": [
+                {
+                    "id": "chirps",
+                    "title": "CHIRPS",
+                    "dclimate:types": ["precip-daily"],
+                }
+            ]
+        },
+        search_body={
+            "features": [
+                {
+                    "id": "chirps-precip-daily-final-p05",
+                    "collection": "chirps",
+                    "properties": {"dclimate:dataset_id": "precip-daily"},
+                    "assets": {"data": {"href": "ipfs://bafy-partial-properties"}},
+                }
+            ]
+        },
+    )
+
+    variant = list_available_datasets_from_stac_server("https://example.test")[
+        "chirps"
+    ]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "final-p05"
+    assert variant["cid"] == "bafy-partial-properties"
+
+
+def test_variant_only_property_keeps_bare_hyphenated_dataset(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={
+            "collections": [
+                {
+                    "id": "chirps",
+                    "title": "CHIRPS",
+                    "dclimate:types": ["precip-daily"],
+                }
+            ]
+        },
+        search_body={
+            "features": [
+                {
+                    "id": "chirps-precip-daily",
+                    "collection": "chirps",
+                    "properties": {"dclimate:variant": "default"},
+                }
+            ]
+        },
+    )
+
+    variant = list_available_datasets_from_stac_server("https://example.test")[
+        "chirps"
+    ]["variants"][0]
+
+    assert variant["dataset"] == "precip-daily"
+    assert variant["variant"] == "default"
+
+
+def test_unknown_collection_uses_explicit_sibling_dataset_hints(monkeypatch):
+    _install_mocks(
+        monkeypatch,
+        collections_body={"collections": []},
+        search_body={
+            "features": [
+                {
+                    "id": "new_coll-precip-daily-final-p05",
+                    "collection": "new_coll",
+                    "properties": {},
+                },
+                {
+                    "id": "new_coll-precip-daily-prelim-p05",
+                    "collection": "new_coll",
+                    "properties": {
+                        "dclimate:dataset_id": "precip-daily",
+                        "dclimate:variant": "prelim-p05",
+                    },
+                },
+            ]
+        },
+    )
+
+    listing = list_available_datasets_from_stac_server("https://example.test")
+
+    assert listing["new_coll"]["types"] == ["precip-daily"]
+    assert {variant["variant"] for variant in listing["new_coll"]["variants"]} == {
+        "final-p05",
+        "prelim-p05",
+    }
+
+
 def test_category_unanimous_only(monkeypatch):
     """When items in a collection disagree on observation, category is dropped."""
     _install_mocks(
@@ -272,14 +370,14 @@ def test_resolve_cid_uses_exact_dataset_id_for_prefix_collisions(monkeypatch):
         },
     )
 
-    cid = resolve_cid_from_stac_server(
+    resolved = resolve_cid_from_stac_server(
         "ecmwf_era5",
         "precipitation_total",
         "finalized",
         "https://example.test",
     )
 
-    assert cid == "bafy-era5-precip-finalized"
+    assert resolved.cid == "bafy-era5-precip-finalized"
 
 
 def test_resolve_cid_rejects_only_prefix_dataset_match(monkeypatch):
@@ -336,26 +434,26 @@ def test_resolve_cid_legacy_id_fallback_is_exact(monkeypatch):
         },
     )
 
-    cid = resolve_cid_from_stac_server(
+    resolved = resolve_cid_from_stac_server(
         "ecmwf_era5",
         "temperature_2m",
         "finalized",
         "https://example.test",
     )
 
-    assert cid == "bafy-era5-t2m"
+    assert resolved.cid == "bafy-era5-t2m"
 
 
 def test_collections_endpoint_error_propagates(monkeypatch):
-    def failing_get(url, *args, **kwargs):
-        return _mock_response({}, status=500)
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return _mock_response(request, {}, status=500)
+        return _mock_response(request, {"features": []})
 
-    monkeypatch.setattr(requests, "get", failing_get)
-    monkeypatch.setattr(
-        requests, "post", lambda *a, **k: _mock_response({"features": []})
-    )
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
-    with pytest.raises(requests.HTTPError):
+    with pytest.raises(httpx.HTTPStatusError):
         list_available_datasets_from_stac_server("https://example.test")
 
 

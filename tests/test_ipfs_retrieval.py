@@ -1,5 +1,6 @@
 import warnings
 
+import httpx
 import pytest
 import xarray as xr
 
@@ -28,25 +29,54 @@ class DummyGroupedStore:
         return {"1", "0"}
 
 
-@pytest.fixture(autouse=True)
-def check_ipfs_connection():
-    return None
+def _chained(wrapper: Exception, cause: Exception) -> Exception:
+    wrapper.__cause__ = cause
+    return wrapper
 
 
 @pytest.mark.parametrize(
-    "message",
+    "error",
     [
-        "Connection refused",
-        "Max retries exceeded",
-        "Name or service not known",
-        "network is unreachable",
-        "nodename nor servname provided",
-        "temporary failure in name resolution",
-        "timed out opening sharded store",
+        ConnectionError("connection refused"),
+        TimeoutError("timed out opening sharded store"),
+        httpx.ConnectTimeout("connect timed out"),
+        httpx.ReadTimeout("gateway timed out"),
+        httpx.ConnectError("connection refused"),
+        httpx.ConnectError("max retries exceeded"),
+        _chained(RuntimeError("wrapped"), httpx.ReadTimeout("gateway timed out")),
     ],
 )
-def test_is_connection_error_classifies_gateway_failures(message):
-    assert ipfs_retrieval._is_connection_error(RuntimeError(message))
+def test_is_connection_error_classifies_gateway_failures(error):
+    assert ipfs_retrieval._is_connection_error(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        FileNotFoundError("no such shard file"),
+        PermissionError("permission denied"),
+        IsADirectoryError("is a directory"),
+        ValueError("not a sharded zarr store"),
+        httpx.HTTPStatusError(
+            "500 Server Error: Internal Server Error",
+            request=httpx.Request("GET", "https://gateway.example"),
+            response=httpx.Response(500),
+        ),
+        _chained(
+            RuntimeError("retries exhausted on 500s"),
+            httpx.HTTPStatusError(
+                "too many 500 responses",
+                request=httpx.Request("GET", "https://gateway.example"),
+                response=httpx.Response(500),
+            ),
+        ),
+        _chained(RuntimeError("wrapped"), FileNotFoundError("missing metadata")),
+    ],
+)
+def test_is_connection_error_rejects_non_network_failures(error):
+    # Filesystem/parse errors must not classify as gateway failures, or the
+    # caller would skip the HAMT fallback for them.
+    assert not ipfs_retrieval._is_connection_error(error)
 
 
 @pytest.mark.asyncio
@@ -77,7 +107,8 @@ async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 
@@ -102,7 +133,8 @@ async def test_explicit_zarr_group_is_passed_to_open_zarr(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 
@@ -127,7 +159,8 @@ async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch
     async def hamt_build(**kwargs):
         raise AssertionError("HAMT fallback should not be attempted")
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         raise ValueError("explicit Zarr group required")
 
     monkeypatch.setattr(ipfs_retrieval.ShardedZarrStore, "open", sharded_open)
@@ -155,7 +188,7 @@ async def test_sharded_v1_warning_is_suppressed_in_client_loader(monkeypatch):
     monkeypatch.setattr(
         ipfs_retrieval.xr,
         "open_zarr",
-        lambda *, store, group=None: xr.Dataset(),
+        lambda *, store, group=None, decode_timedelta=False: xr.Dataset(),
     )
 
     with warnings.catch_warnings(record=True) as caught_warnings:
@@ -184,7 +217,8 @@ async def test_hamt_fallback_preserves_explicit_zarr_group(monkeypatch):
 
     opened_groups = []
 
-    def open_zarr(*, store, group=None):
+    def open_zarr(*, store, group=None, decode_timedelta=False):
+        assert decode_timedelta is True
         opened_groups.append(group)
         return xr.Dataset()
 

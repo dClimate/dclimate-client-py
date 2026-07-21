@@ -5,25 +5,125 @@ This module provides direct access to a STAC server API for resolving dataset CI
 which is faster than traversing the IPFS-hosted catalog structure.
 """
 
-from typing import Any, Dict, Optional, Set
-import requests
+from collections.abc import Iterator
+from json import dumps
+from threading import Lock
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Set
+from urllib.parse import urljoin
+
+import httpx
 
 from .datasets import SpatialExtent, TemporalExtent
 
 STAC_SERVER_URL = "https://api.stac.dclimate.net"
 
 
-def _dataset_id_from_item_id(feature_id: str, collection: str) -> Optional[str]:
+_MAX_SEARCH_PAGES = 50
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = Lock()
+
+
+def _client() -> httpx.Client:
+    """Return the process-wide pooled client used for synchronous STAC calls."""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        with _HTTP_CLIENT_LOCK:
+            if _HTTP_CLIENT is None:
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+    return _HTTP_CLIENT
+
+
+class ResolvedDataset(NamedTuple):
+    cid: str
+    variant: str
+
+
+def _dataset_and_variant_from_item_id(
+    feature_id: str,
+    collection: str,
+    dataset: Optional[str] = None,
+    variant: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
     prefix = f"{collection}-"
     remainder = (
         feature_id[len(prefix) :] if feature_id.startswith(prefix) else feature_id
     )
-    dataset, _, _ = remainder.partition("-")
-    return dataset or None
+    if dataset is not None:
+        if remainder == dataset:
+            return dataset, None
+        dataset_prefix = f"{dataset}-"
+        if remainder.startswith(dataset_prefix):
+            return dataset, remainder[len(dataset_prefix) :] or None
+        return None, None
+
+    if variant is not None:
+        variant_suffix = f"-{variant}"
+        if remainder.endswith(variant_suffix):
+            return remainder[: -len(variant_suffix)] or None, variant
+        return None, None
+
+    parsed_dataset, separator, variant = remainder.partition("-")
+    return parsed_dataset or None, (variant or None) if separator else None
+
+
+def _dataset_id_from_item_id(
+    feature_id: str,
+    collection: str,
+    dataset: Optional[str] = None,
+) -> Optional[str]:
+    parsed_dataset, _ = _dataset_and_variant_from_item_id(
+        feature_id, collection, dataset
+    )
+    return parsed_dataset
+
+
+def _dataset_and_variant_from_known_datasets(
+    feature_id: str,
+    collection: str,
+    known_datasets: Iterable[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Parse an item id using the longest matching known dataset id.
+
+    Hyphens delimit both dataset ids and variants, so an unhinted id such as
+    ``chirps-precip-daily-final-p05`` is inherently ambiguous. Collection
+    metadata and explicit sibling-item properties provide the missing hint.
+    """
+    candidates = sorted(
+        {value for value in known_datasets if isinstance(value, str) and value},
+        key=len,
+        reverse=True,
+    )
+    for candidate in candidates:
+        parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+            feature_id, collection, dataset=candidate
+        )
+        if parsed_dataset is not None:
+            return parsed_dataset, parsed_variant
+    return _dataset_and_variant_from_item_id(feature_id, collection)
+
+
+def _feature_variant(
+    feature: Dict[str, Any], collection: str, dataset: Optional[str] = None
+) -> Optional[str]:
+    props = feature.get("properties") or {}
+    variant = props.get("dclimate:variant")
+    if variant:
+        return variant
+
+    feature_id = feature.get("id")
+    if not isinstance(feature_id, str):
+        return None
+    _, parsed_variant = _dataset_and_variant_from_item_id(
+        feature_id, collection, dataset
+    )
+    return parsed_variant
 
 
 def _feature_matches_dataset(
-    feature: Dict[str, Any], collection: str, dataset: str
+    feature: Dict[str, Any],
+    collection: str,
+    dataset: str,
+    known_datasets: Iterable[str] = (),
 ) -> bool:
     feature_collection = feature.get("collection")
     if feature_collection and feature_collection != collection:
@@ -37,7 +137,105 @@ def _feature_matches_dataset(
     feature_id = feature.get("id")
     if not isinstance(feature_id, str):
         return False
-    return _dataset_id_from_item_id(feature_id, collection) == dataset
+    variant = props.get("dclimate:variant")
+    if variant:
+        parsed_dataset, _ = _dataset_and_variant_from_item_id(
+            feature_id, collection, variant=variant
+        )
+        if parsed_dataset is not None:
+            return parsed_dataset == dataset
+        # The id does not encode the property variant (e.g. a bare id with
+        # properties variant "default") — fall through to dataset matching.
+    if known_datasets:
+        parsed_dataset, _ = _dataset_and_variant_from_known_datasets(
+            feature_id, collection, known_datasets
+        )
+        return parsed_dataset == dataset
+    return _dataset_id_from_item_id(feature_id, collection, dataset) == dataset
+
+
+def _search_pages(
+    server_url: str,
+    body: Dict[str, Any],
+    timeout: int,
+) -> Iterator[Dict[str, Any]]:
+    """Yield bounded STAC search pages while following ``rel=next`` links."""
+    url = f"{server_url.rstrip('/')}/search"
+    method = "POST"
+    request_body: Optional[Dict[str, Any]] = body
+    request_headers: Dict[str, str] = {}
+    seen: Set[tuple[str, str, str, str]] = set()
+
+    for _ in range(_MAX_SEARCH_PAGES):
+        page_key = (
+            method,
+            url,
+            dumps(request_body, sort_keys=True, default=str),
+            dumps(request_headers, sort_keys=True, default=str),
+        )
+        if page_key in seen:
+            return
+        seen.add(page_key)
+
+        if method == "POST":
+            request_kwargs: Dict[str, Any] = {
+                "json": request_body,
+                "timeout": timeout,
+            }
+            if request_headers:
+                request_kwargs["headers"] = request_headers
+            response = _client().post(url, **request_kwargs)
+        else:
+            request_kwargs = {"params": request_body or None, "timeout": timeout}
+            if request_headers:
+                request_kwargs["headers"] = request_headers
+            response = _client().get(url, **request_kwargs)
+        response.raise_for_status()
+        page = response.json()
+        yield page
+
+        if not (page.get("features") or []):
+            return
+        next_link = next(
+            (
+                link
+                for link in page.get("links", []) or []
+                if link.get("rel") == "next" and link.get("href")
+            ),
+            None,
+        )
+        if next_link is None:
+            return
+
+        url = urljoin(url, next_link["href"])
+        method = str(next_link.get("method", "GET")).upper()
+        if method not in {"GET", "POST"}:
+            return
+        linked_headers = next_link.get("headers")
+        request_headers = linked_headers if isinstance(linked_headers, dict) else {}
+        linked_body = next_link.get("body")
+        if isinstance(linked_body, dict):
+            # STAC API next-link contract: with "merge": true the linked
+            # body extends the original request (keeping filters like
+            # "collections"); otherwise it replaces it wholesale.
+            if next_link.get("merge"):
+                request_body = {**body, **linked_body}
+            else:
+                request_body = linked_body
+        elif next_link.get("merge"):
+            # ``merge: true`` without a link body still carries the original
+            # search filters to the next request.
+            request_body = dict(body)
+        else:
+            request_body = None
+    else:
+        # Reaching the bound with a valid next link means the result is
+        # incomplete. Surface that explicitly so callers can use their
+        # catalog fallback instead of accepting truncated search results.
+        raise ValueError(
+            f"STAC search reached its page limit of {_MAX_SEARCH_PAGES} "
+            "while another next link was present"
+        )
 
 
 def resolve_cid_from_stac_server(
@@ -45,9 +243,12 @@ def resolve_cid_from_stac_server(
     dataset: str,
     variant: Optional[str] = None,
     server_url: str = STAC_SERVER_URL,
-) -> str:
+) -> ResolvedDataset:
     """
     Resolve dataset CID via STAC server /search API.
+
+    Changed in 0.6: returns ResolvedDataset; variant='' is treated as an
+    explicit (unresolvable) variant rather than no-variant.
 
     Uses the same API format as the frontend (POST /search with collections filter).
 
@@ -58,11 +259,11 @@ def resolve_cid_from_stac_server(
         server_url: STAC server base URL
 
     Returns:
-        str: The IPFS CID of the Zarr dataset (without 'ipfs://' prefix)
+        ResolvedDataset: The IPFS CID and selected variant
 
     Raises:
         ValueError: If dataset or variant is not found
-        requests.HTTPError: If the server request fails
+        httpx.HTTPError: If the server request fails
     """
     # Search by collection
     body = {
@@ -70,21 +271,39 @@ def resolve_cid_from_stac_server(
         "collections": [collection],
     }
 
-    response = requests.post(f"{server_url}/search", json=body, timeout=10)
-    response.raise_for_status()
+    # An item with no variant segment/property is what the listing API
+    # reports as the "default" variant — keep resolve symmetric with list.
+    def _effective_variant(feature: Dict[str, Any]) -> str:
+        return _feature_variant(feature, collection, dataset) or "default"
 
-    features = response.json().get("features", [])
+    features: list[Dict[str, Any]] = []
+    for page in _search_pages(server_url, body, timeout=10):
+        features.extend(page.get("features", []) or [])
 
+    known_datasets = {
+        dataset_id
+        for feature in features
+        if isinstance(feature, dict)
+        for dataset_id in [(feature.get("properties") or {}).get("dclimate:dataset_id")]
+        if isinstance(dataset_id, str) and dataset_id
+    }
+    known_datasets.add(dataset)
     # Filter to the exact dataset. A prefix match would conflate datasets such
-    # as precipitation_total and precipitation_total_land.
-    matches = [f for f in features if _feature_matches_dataset(f, collection, dataset)]
+    # as ``precip`` and a known hyphenated dataset ``precip-daily``.
+    matches = [
+        feature
+        for feature in features
+        if _feature_matches_dataset(
+            feature, collection, dataset, known_datasets=known_datasets
+        )
+    ]
     if not matches:
         raise ValueError(f"No items found for {collection}/{dataset}")
 
     # Select by variant or use default preference
-    if variant:
+    if variant is not None:
         item = next(
-            (f for f in matches if f["properties"].get("dclimate:variant") == variant),
+            (f for f in matches if _effective_variant(f) == variant),
             None,
         )
         if not item:
@@ -96,11 +315,7 @@ def resolve_cid_from_stac_server(
         item = matches[0]
         for preferred in ["default", "final", "finalized", "latest"]:
             found = next(
-                (
-                    f
-                    for f in matches
-                    if f["properties"].get("dclimate:variant") == preferred
-                ),
+                (f for f in matches if _effective_variant(f) == preferred),
                 None,
             )
             if found:
@@ -108,11 +323,12 @@ def resolve_cid_from_stac_server(
                 break
 
     # Extract CID from asset
+    selected_variant = variant if variant is not None else _effective_variant(item)
     href = item.get("assets", {}).get("data", {}).get("href", "")
     if href.startswith("ipfs://"):
-        return href.replace("ipfs://", "")
+        return ResolvedDataset(href.replace("ipfs://", ""), selected_variant)
     if href:
-        return href
+        return ResolvedDataset(href, selected_variant)
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
 
@@ -130,7 +346,7 @@ def list_available_datasets_from_stac_server(
     List all datasets/variants by querying a STAC API server directly.
 
     Fast path that mirrors ``list_available_datasets`` (the IPFS walker) without
-    traversing the IPFS-hosted catalog tree. Two requests:
+    traversing the IPFS-hosted catalog tree. It queries:
 
     1. ``GET  /collections`` — collection ids, titles
     2. ``POST /search``      — items, with dataset/variant/CID in properties
@@ -148,21 +364,11 @@ def list_available_datasets_from_stac_server(
       ``dclimate:observation`` properties — only when every item in the
       collection agrees, to avoid picking a misleading value when items
       disagree.
-    - The fixed ``limit: 1000`` covers today's catalog (~45 items) by a wide
-      margin. If the catalog grows past that, switch to following the STAC
-      ``next`` link instead of a single request.
+    - Search pagination is bounded to avoid looping on malformed ``next`` links.
     """
-    collections_resp = requests.get(f"{server_url}/collections", timeout=10)
+    collections_resp = _client().get(f"{server_url}/collections", timeout=10)
     collections_resp.raise_for_status()
-    search_resp = requests.post(
-        f"{server_url}/search",
-        json={"limit": 1000},
-        timeout=15,
-    )
-    search_resp.raise_for_status()
-
     collections_body = collections_resp.json()
-    search_body = search_resp.json()
 
     # Accumulator per collection. Built up from /collections then enriched by
     # the /search response. Collections that have no items end up filtered out
@@ -181,9 +387,40 @@ def list_available_datasets_from_stac_server(
             "organization": organization,
             "observations": set(),
             "datasets": {},  # dataset_name -> { variant_name -> variant_entry }
+            "known_datasets": set(),
         }
 
-    for feature in search_body.get("features", []) or []:
+        summaries = coll.get("summaries") or {}
+        declared_datasets = coll.get("dclimate:types") or summaries.get(
+            "dclimate:dataset_id", []
+        )
+        if isinstance(declared_datasets, list):
+            accumulators[coll_id]["known_datasets"].update(
+                value for value in declared_datasets if isinstance(value, str) and value
+            )
+
+    search_features = [
+        feature
+        for page in _search_pages(server_url, {"limit": 100}, timeout=15)
+        for feature in page.get("features", []) or []
+    ]
+    dataset_hints: Dict[str, Set[str]] = {}
+    for feature in search_features:
+        collection_id = feature.get("collection")
+        props = feature.get("properties") or {}
+        dataset_id = props.get("dclimate:dataset_id")
+        if (
+            isinstance(collection_id, str)
+            and isinstance(dataset_id, str)
+            and dataset_id
+        ):
+            dataset_hints.setdefault(collection_id, set()).add(dataset_id)
+
+    for collection_id, hints in dataset_hints.items():
+        if collection_id in accumulators:
+            accumulators[collection_id]["known_datasets"].update(hints)
+
+    for feature in search_features:
         feature_id = feature.get("id", "")
         collection_id = feature.get("collection")
         if not collection_id and isinstance(feature_id, str) and "-" in feature_id:
@@ -202,6 +439,7 @@ def list_available_datasets_from_stac_server(
                 "organization": organization,
                 "observations": set(),
                 "datasets": {},
+                "known_datasets": set(dataset_hints.get(collection_id, set())),
             }
             accumulators[collection_id] = entry
 
@@ -212,17 +450,37 @@ def list_available_datasets_from_stac_server(
 
         # Prefer explicit dclimate:* properties; fall back to id-parsing for
         # items that pre-date the property convention.
-        id_parts = feature_id.split("-") if isinstance(feature_id, str) else []
-        dataset_name = props.get("dclimate:dataset_id") or (
-            id_parts[1] if len(id_parts) >= 2 else None
-        )
-        variant_name = props.get("dclimate:variant") or (
-            "-".join(id_parts[2:]) if len(id_parts) >= 3 else "default"
-        )
+        property_dataset = props.get("dclimate:dataset_id")
+        property_variant = props.get("dclimate:variant")
+        if not isinstance(feature_id, str):
+            parsed_dataset, parsed_variant = None, None
+        elif property_dataset:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                feature_id, collection_id, dataset=property_dataset
+            )
+        elif property_variant:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_item_id(
+                feature_id, collection_id, variant=property_variant
+            )
+            if parsed_dataset is None:
+                parsed_dataset, _ = _dataset_and_variant_from_known_datasets(
+                    feature_id, collection_id, entry["known_datasets"]
+                )
+                parsed_variant = property_variant
+        else:
+            parsed_dataset, parsed_variant = _dataset_and_variant_from_known_datasets(
+                feature_id, collection_id, entry["known_datasets"]
+            )
+        dataset_name = property_dataset or parsed_dataset
+        variant_name = props.get("dclimate:variant") or parsed_variant or "default"
         if not dataset_name:
             continue
 
         cid = _strip_ipfs_scheme(props.get("dclimate:latest_dataset_cid"))
+        if not cid:
+            cid = _strip_ipfs_scheme(
+                (feature.get("assets") or {}).get("data", {}).get("href")
+            )
 
         variant_entry: Dict[str, Any] = {
             "dataset": dataset_name,

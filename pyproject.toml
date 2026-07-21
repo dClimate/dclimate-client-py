@@ -6,7 +6,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dclimate-client-py"
-version = "0.5.11" # Set a static version or handle it in versioning strategy
+version = "0.6.0" # Set a static version or handle it in versioning strategy
 description = "Python client library for accessing dClimate weather and climate data"
 readme = "README.md"
 license = {text = "MIT"}
@@ -29,24 +29,28 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "aiobotocore",
+    "aiobotocore>=2.13.0",
+    "aiohttp>=3.9.0",
     "xarray>=2025.3.0",
-    "rioxarray",
+    "rioxarray>=0.15.0",
     "zarr>=3.0.8",
+    # numcodecs 0.16's zarr3 compatibility module requires zarr >=3.1.3,
+    # while py-hamt 3.x currently constrains zarr below 3.1.
+    "numcodecs[crc32c]>=0.14,<0.16",
     "numpy>=2.1.3",
-    "py_hamt>=3.4.1",
-    "requests",
-    "pyarrow",
-    "geopandas",
-    "pandas",
-    "s3fs",
-    "shapely",
-    "scipy",
+    "py_hamt>=3.5.0",
+    "multiformats>=0.3.1",
+    "geopandas>=1.0.0",
+    "pandas>=2.2.0",
+    "s3fs>=2024.6.0",
+    "shapely>=2.0.0",
+    # xarray's in-memory to_netcdf() (GeotemporalData.to_netcdf with no args)
+    # requires the scipy netCDF backend
+    "scipy>=1.12.0",
     "pycryptodome>=3.21.0",
     "pystac>=1.10.0",
     "httpx>=0.27.0",
     "x402[evm,httpx]>=2.1.0",
-    "python-dotenv>=1.0.0",
     "opentelemetry-api>=1.30.0",
 ]
 
@@ -54,12 +58,28 @@ dependencies = [
 Homepage = "https://dclimate.net/"
 
 [project.optional-dependencies]
-testing = ["pytest", "pytest-cov", "pytest-mock", "pytest-asyncio>=1.3.0"]
+testing = [
+    "mypy>=1.14",
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio>=1.3.0",
+]
 dev = ["pre-commit>=4.1.0", "ruff>=0.9.5"]
+examples = ["python-dotenv>=1.0.0"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 markers = [
     "ipfs: marks tests requiring a running IPFS daemon and network access",
+    "ipfs_rpc: marks tests requiring a writable IPFS RPC endpoint",
+    "stac_pointer: marks tests requiring the dClimate STAC CID endpoint",
     "integration: marks integration tests (often slower, may require external services like IPFS)",
     # Add other custom marks here if you create more
 ]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

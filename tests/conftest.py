@@ -3,13 +3,35 @@ import itertools
 import pathlib
 
 import geopandas as gpd
-import os
 import numpy as np
 import pytest
 import xarray as xr
-import requests  # Import requests here for the check
+import httpx
 import zarr
 import zarr.storage
+
+from tests.ipfs_config import IPFS_GATEWAY_URL, IPFS_RPC_URL, STAC_CATALOG_URL
+
+
+@pytest.fixture
+def install_httpx_mock(monkeypatch):
+    """Inject a pooled MockTransport client through a module's client accessor."""
+    clients: list[httpx.Client] = []
+
+    def install(module, handler):
+        client = httpx.Client(
+            transport=httpx.MockTransport(handler),
+            timeout=30,
+            follow_redirects=True,
+        )
+        clients.append(client)
+        monkeypatch.setattr(module, "_client", lambda: client)
+        return client
+
+    yield install
+
+    for client in clients:
+        client.close()
 
 
 def pytest_addoption(parser):
@@ -28,16 +50,46 @@ def pytest_configure(config):
         "markers",
         "integration: mark test as integration test requiring external services",
     )
+    config.addinivalue_line(
+        "markers", "ipfs_rpc: mark test as requiring a writable IPFS RPC endpoint"
+    )
+    config.addinivalue_line(
+        "markers", "stac_pointer: mark test as requiring the STAC CID endpoint"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration tests unless --run-integration is passed."""
-    if config.getoption("--run-integration"):
-        return
+    """Gate tests that require external integration services."""
     skip_integration = pytest.mark.skip(reason="need --run-integration option to run")
+    ipfs_items = [item for item in items if "ipfs" in item.keywords]
+    skip_ipfs = None
+    if ipfs_items:
+        if not is_ipfs_running(IPFS_GATEWAY_URL):
+            skip_ipfs = pytest.mark.skip(
+                reason=f"IPFS gateway not responding at {IPFS_GATEWAY_URL}"
+            )
+    ipfs_rpc_items = [item for item in items if "ipfs_rpc" in item.keywords]
+    skip_ipfs_rpc = None
+    if ipfs_rpc_items and not is_ipfs_rpc_running(IPFS_RPC_URL):
+        skip_ipfs_rpc = pytest.mark.skip(
+            reason=f"IPFS RPC endpoint not responding at {IPFS_RPC_URL}"
+        )
+    stac_pointer_items = [item for item in items if "stac_pointer" in item.keywords]
+    skip_stac_pointer = None
+    if stac_pointer_items and not is_stac_pointer_running(STAC_CATALOG_URL):
+        skip_stac_pointer = pytest.mark.skip(
+            reason=f"STAC catalog pointer not responding at {STAC_CATALOG_URL}"
+        )
+
     for item in items:
-        if "integration" in item.keywords:
+        if "integration" in item.keywords and not config.getoption("--run-integration"):
             item.add_marker(skip_integration)
+        if "ipfs" in item.keywords and skip_ipfs is not None:
+            item.add_marker(skip_ipfs)
+        if "ipfs_rpc" in item.keywords and skip_ipfs_rpc is not None:
+            item.add_marker(skip_ipfs_rpc)
+        if "stac_pointer" in item.keywords and skip_stac_pointer is not None:
+            item.add_marker(skip_stac_pointer)
 
 
 HERE = pathlib.Path(__file__).parent
@@ -49,7 +101,7 @@ SAMPLE_ZARRS = ETC / "sample_zarrs"
 def input_ds():
     # Keeping local fixtures for tests that don't need IPFS loading (like test_geotemporal_data)
     with zarr.storage.ZipStore(ETC / "retrieval_test.zip", mode="r") as in_zarr:
-        return xr.open_zarr(in_zarr, chunks=None).compute()
+        return xr.open_zarr(in_zarr, chunks=None, decode_timedelta=True).compute()
 
 
 @pytest.fixture
@@ -58,7 +110,7 @@ def forecast_ds():
     with zarr.storage.ZipStore(
         ETC / "forecast_retrieval_test.zip", mode="r"
     ) as in_zarr:
-        return xr.open_zarr(in_zarr, chunks=None).compute()
+        return xr.open_zarr(in_zarr, chunks=None, decode_timedelta=True).compute()
 
 
 @pytest.fixture
@@ -130,18 +182,6 @@ def single_var_dataset():
     return make_dataset(vars=1)
 
 
-# --- Add IPFS Connection Check Fixture ---
-# We need the check_ipfs_connection fixture available for multiple test files
-# Let's reuse the one from test_integration_ipfs.py
-
-
-@pytest.fixture(scope="session")  # Changed scope to session for efficiency
-def ipfs_gateway_url():
-    """Returns the IPFS gateway URL to check."""
-    # Prioritize environment variable, then default from py-hamt's IPFSStore
-    return os.environ.get("IPFS_GATEWAY_URI_STEM", "http://127.0.0.1:8080")
-
-
 def is_ipfs_running(gateway_url: str) -> bool:
     """Check if IPFS daemon Gateway is responsive."""
 
@@ -151,8 +191,10 @@ def is_ipfs_running(gateway_url: str) -> bool:
         # Use a known immutable CID (e.g., the empty directory CID)
         # Let's try a known immutable path: "Hello from IPFS Gateway Checker"
         known_cid = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m"  # Example file
-        response = requests.head(
-            f"{gateway_url.rstrip('/')}/ipfs/{known_cid}", timeout=5
+        response = httpx.head(
+            f"{gateway_url.rstrip('/')}/ipfs/{known_cid}",
+            timeout=5,
+            follow_redirects=True,
         )
         # Allow 200 OK or 404 Not Found (if CID isn't locally available but gateway is up)
         # Avoid checking strict 200 as CID might not be pinned locally but gateway is running
@@ -166,29 +208,37 @@ def is_ipfs_running(gateway_url: str) -> bool:
                 f"IPFS Gateway check failed (Status: {response.status_code}) at {gateway_url}"
             )
             return False
-    except requests.exceptions.ConnectionError:
+    except httpx.ConnectError:
         print(f"IPFS Gateway connection failed at {gateway_url}")
         return False
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         print(f"IPFS Gateway check timed out at {gateway_url}")
         return False
-    except requests.exceptions.RequestException as e:
+    except httpx.HTTPError as e:
         print(f"IPFS Gateway check failed with unexpected error: {e}")
         return False
 
 
-# Apply autouse=True to run this check once for the session for all tests
-@pytest.fixture(scope="session", autouse=True)
-def check_ipfs_connection(ipfs_gateway_url):
-    """Skips tests if IPFS daemon Gateway is not accessible."""
-    if not is_ipfs_running(ipfs_gateway_url):
-        pytest.skip(
-            f"IPFS daemon Gateway not responding at {ipfs_gateway_url}. Skipping integration tests."
-        )
-    else:
-        print(
-            f"IPFS daemon Gateway responding at {ipfs_gateway_url}. Proceeding with integration tests."
-        )
+def is_ipfs_rpc_running(rpc_url: str) -> bool:
+    """Check whether the writable Kubo RPC API is responsive."""
+    try:
+        response = httpx.post(f"{rpc_url}/api/v0/id", timeout=5, follow_redirects=True)
+        response.raise_for_status()
+        payload = response.json()
+        return isinstance(payload, dict) and bool(payload.get("ID"))
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+def is_stac_pointer_running(catalog_url: str) -> bool:
+    """Check whether the STAC pointer returns a non-empty root CID."""
+    try:
+        response = httpx.get(catalog_url, timeout=5, follow_redirects=True)
+        response.raise_for_status()
+        payload = response.json()
+        return isinstance(payload, dict) and bool(payload.get("cid"))
+    except (httpx.HTTPError, ValueError):
+        return False
 
 
 # Define known dataset IDs accessible via STAC for tests

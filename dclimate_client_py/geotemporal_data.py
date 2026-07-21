@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import datetime
 import functools
 import math
@@ -6,12 +8,14 @@ import operator
 import typing
 from collections.abc import Mapping
 
-import geopandas as gpd
 import pandas as pd
 import numpy as np
 from shapely.ops import unary_union
 import xarray as xr
 from xarray.core.variable import MissingDimensionsError
+
+if typing.TYPE_CHECKING:
+    import geopandas as gpd
 
 from .dclimate_zarr_errors import (
     InvalidForecastRequestError,
@@ -36,7 +40,12 @@ class GeotemporalData:
         data variable.
     """
 
-    def __init__(self, data: xr.Dataset, dataset_name: str, data_var: str = None):
+    def __init__(
+        self,
+        data: xr.Dataset,
+        dataset_name: str,
+        data_var: typing.Optional[str] = None,
+    ):
         self.data = data
         self.dataset_name = dataset_name
         self._data_var = data_var
@@ -105,7 +114,7 @@ class GeotemporalData:
         SelectionTooLargeError
             When dataset size limit is violated
         """
-        num_points = functools.reduce(operator.mul, self.data.sizes.values())
+        num_points = functools.reduce(operator.mul, self.data.sizes.values(), 1)
         if num_points > point_limit:
             raise errors.SelectionTooLargeError(
                 f"Selection of {num_points} data points is more than limit of {point_limit}"
@@ -122,7 +131,9 @@ class GeotemporalData:
         if self.data_var.isnull().all():
             raise errors.NoDataFoundError("Selection is empty or all NA")
 
-    def forecast(self, forecast_reference_time: datetime.datetime) -> "GeotemporalData":
+    def forecast(
+        self, forecast_reference_time: typing.Union[str, datetime.datetime]
+    ) -> "GeotemporalData":
         """
         Filter a 4D forecast dataset to a 3D dataset ready for analysis
 
@@ -203,7 +214,7 @@ class GeotemporalData:
             data = self.data.sel(selection, method="nearest")
         else:
             try:
-                data = self.data.sel(selection, method="nearest", tolerance=10e-5)
+                data = self.data.sel(selection, method="nearest", tolerance=1e-5)
             except KeyError:
                 raise errors.NoDataFoundError(
                     "User requested not to snap_to_grid, but exact coord not in dataset"
@@ -217,16 +228,32 @@ class GeotemporalData:
         epsg_crs: int,
         snap_to_grid: bool = True,
     ) -> "GeotemporalData":
-        mask = list(gpd.geoseries.GeoSeries(points_mask).set_crs(epsg_crs).to_crs(4326))
-        lats, lons = [point.y for point in mask], [point.x for point in mask]
-        lats, lons = xr.DataArray(lats, dims="point"), xr.DataArray(lons, dims="point")
+        import geopandas as gpd
+
+        series = gpd.GeoSeries(points_mask).set_crs(epsg_crs).to_crs(4326)
+        if series.isna().any():
+            # GeoSeries.y maps missing geometries to NaN, which .sel would
+            # silently snap to an arbitrary grid cell.
+            raise errors.InvalidSelectionError(
+                "points_mask contains missing geometries"
+            )
+        if series.is_empty.any():
+            raise errors.InvalidSelectionError("points_mask contains empty geometries")
+        lat_values = series.y.to_numpy()
+        lon_values = series.x.to_numpy()
+        if not np.isfinite(lat_values).all() or not np.isfinite(lon_values).all():
+            raise errors.InvalidSelectionError(
+                "points_mask contains non-finite coordinates"
+            )
+        lats = xr.DataArray(lat_values, dims="point")
+        lons = xr.DataArray(lon_values, dims="point")
 
         if snap_to_grid:
             data = self.data.sel(latitude=lats, longitude=lons, method="nearest")
         else:
             try:
                 data = self.data.sel(
-                    latitude=lats, longitude=lons, method="nearest", tolerance=10e-5
+                    latitude=lats, longitude=lons, method="nearest", tolerance=1e-5
                 )
             except KeyError:
                 raise errors.NoDataFoundError(
@@ -244,7 +271,7 @@ class GeotemporalData:
         lat: float,
         lon: float,
         radius: float,
-    ) -> xr.Dataset:
+    ) -> "GeotemporalData":
         """Reduces dataset to points within radius of given center coordinates
 
         Parameters
@@ -259,11 +286,32 @@ class GeotemporalData:
 
         Returns
         -------
-        GeotempoeralData
+        GeotemporalData
             New dataset
         """
-        distances = _haversine(lat, lon, self.data["latitude"], self.data["longitude"])
-        data = self.data.where(distances < radius, drop=True)
+        latitudes = self.data["latitude"]
+        longitudes = self.data["longitude"]
+        data = self.data
+
+        # Pre-crop only for well-behaved grids; exotic layouts (non-index,
+        # non-monotonic, NaN coords, 0-360 longitudes) skip the crop and get
+        # the original full-grid haversine mask below.
+        bounds = None
+        if _sliceable_coordinate(self.data, "latitude") and _sliceable_coordinate(
+            self.data, "longitude"
+        ):
+            bounds = _circle_bounding_box(lat, lon, radius, latitudes, longitudes)
+        if bounds is not None:
+            min_lat, min_lon, max_lat, max_lon = bounds
+            data = data.sel(
+                {
+                    "latitude": _coordinate_slice(latitudes, min_lat, max_lat),
+                    "longitude": _coordinate_slice(longitudes, min_lon, max_lon),
+                }
+            )
+
+        distances = _haversine(lat, lon, data["latitude"], data["longitude"])
+        data = data.where(distances < radius, drop=True)
         return self._new(data)
 
     def rectangle(
@@ -296,7 +344,10 @@ class GeotemporalData:
         Returns
         -------
         GeotemporalData
-            New dataset
+            New dataset. For regular (1-D monotonic) grids this is a
+            zero-copy view of the parent dataset, and integer data
+            variables keep their dtype (the old mask-based selection
+            upcast them to float64).
         """
         try:
             latitudes = self.data[latitude_key]
@@ -306,13 +357,34 @@ class GeotemporalData:
                 "Latitude/longitude coordinates were not found in the dataset."
             ) from exc
 
-        data = self.data.where(
-            (latitudes >= min_lat)
-            & (latitudes <= max_lat)
-            & (longitudes >= min_lon)
-            & (longitudes <= max_lon),
-            drop=True,
+        if not (
+            _sliceable_coordinate(self.data, latitude_key)
+            and _sliceable_coordinate(self.data, longitude_key)
+        ):
+            # Legacy mask path for exotic layouts: non-index or
+            # non-monotonic coordinates, NaNs, curvilinear grids.
+            data = self.data.where(
+                (latitudes >= min_lat)
+                & (latitudes <= max_lat)
+                & (longitudes >= min_lon)
+                & (longitudes <= max_lon),
+                drop=True,
+            )
+            return self._new(data)
+
+        data = self.data.sel(
+            {
+                latitude_key: _coordinate_slice(latitudes, min_lat, max_lat),
+                longitude_key: _coordinate_slice(longitudes, min_lon, max_lon),
+            }
         )
+        if data[latitude_key].size == 0 or data[longitude_key].size == 0:
+            data = data.isel(
+                {
+                    latitudes.dims[0]: slice(0, 0),
+                    longitudes.dims[0]: slice(0, 0),
+                }
+            )
         return self._new(data)
 
     def polygons(
@@ -338,25 +410,45 @@ class GeotemporalData:
         GeotemporalData
             New dataset
         """
+        try:
+            import rioxarray
+        except ImportError as exc:
+            raise ImportError(
+                "GeotemporalData.polygons() requires rioxarray to be installed"
+            ) from exc
+
+        import geopandas as gpd
+
+        # Normalize the mask before comparing areas or selecting a fallback
+        # point. Dataset coordinates are WGS84; using projected coordinates
+        # here would otherwise compare square metres with square degrees and
+        # pass metre-valued centroids to latitude/longitude selection.
+        mask = gpd.GeoSeries(polygons_mask, crs=epsg_crs).to_crs(4326)
+        normalized_polygons = mask.array
+
         # If the polygon(s) are collectively smaller than the size of one grid cell,
         # clipping will return no data In this case return data from the grid cell nearest
         # to the center of the polygon
-        if self.data.attrs["spatial resolution"] ** 2 > polygons_mask.union_all().area:
-            return self.reduce_polygon_to_point(polygons_mask)
+        if (
+            self.data.attrs["spatial resolution"] ** 2
+            > normalized_polygons.union_all().area
+        ):
+            return self.reduce_polygon_to_point(normalized_polygons)
 
         # return clipped data as normal if the polygons are large enough
-        self.data.rio.set_spatial_dims(
-            x_dim="longitude", y_dim="latitude", inplace=True
+        spatial_data = self.data.rio.set_spatial_dims(
+            x_dim="longitude", y_dim="latitude", inplace=False
         )
-        self.data.rio.write_crs("epsg:4326", inplace=True)
-        mask = gpd.geoseries.GeoSeries(polygons_mask).set_crs(epsg_crs).to_crs(4326)
+        spatial_data = spatial_data.rio.write_crs("epsg:4326")
         min_lon, min_lat, max_lon, max_lat = mask.total_bounds
-        box_ds = self.rectangle(min_lat, min_lon, max_lat, max_lon).data
+        box_ds = (
+            self._new(spatial_data).rectangle(min_lat, min_lon, max_lat, max_lon).data
+        )
         self._new(box_ds).check_dataset_size(point_limit=point_limit)
         try:
             shaped_ds = box_ds.rio.clip(mask, 4326, drop=True)
-        except errors.NoDataInBounds:
-            return self.data.reduce_polygon_to_point(polygons_mask)
+        except rioxarray.exceptions.NoDataInBounds:
+            return self.reduce_polygon_to_point(normalized_polygons)
 
         data_var = list(shaped_ds.data_vars)[0]
         if "grid_mapping" in shaped_ds[data_var].attrs:
@@ -527,7 +619,7 @@ class GeotemporalData:
                 "day": f"{time_unit}D",
                 "week": f"{time_unit}W",
                 "month": f"{time_unit}ME",
-                "quarter": f"{time_unit}Q",
+                "quarter": f"{time_unit}QE",
                 "year": f"{time_unit}YE",
             }
             # Resample by the specified time period and aggregate by the specified method
@@ -563,9 +655,10 @@ class GeotemporalData:
         _check_input_parameters(agg_method=agg_method)
         # Aggregate by the specified method over the specified rolling window length
         rolled = self.data.rolling(time=window_size)
-        rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).dropna("time")
-        # remove NAs at beginning/end of array where window size is not large enough to
-        # compute a value
+        # Trim incomplete leading windows while preserving spatial NAs.
+        rolled_agg = getattr(rolled, agg_method)(keep_attrs=True).isel(
+            time=slice(window_size - 1, None)
+        )
 
         return self._new(rolled_agg)
 
@@ -582,10 +675,12 @@ class GeotemporalData:
 
         If no arguments are passed, a bytes object is returned.
         """
+        ds = self.data.copy()
+
         try:
-            if self.data.update_in_progress and not self.data.update_is_append_only:
-                update_date_range = self.data.attrs["update_date_range"]
-                self.data.attrs["updating date range"] = (
+            if ds.update_in_progress and not ds.update_is_append_only:
+                update_date_range = ds.attrs["update_date_range"]
+                ds.attrs["updating date range"] = (
                     f"{update_date_range[0]}-{update_date_range[1]}"
                 )
         except AttributeError:
@@ -599,10 +694,15 @@ class GeotemporalData:
             "finalization date",
             "update_date_range",
         ]:
-            if bad_key in self.data.attrs:
-                del self.data.attrs[bad_key]
+            if bad_key in ds.attrs:
+                del ds.attrs[bad_key]
 
-        return self.data.to_netcdf(*args, **kwargs)
+        serialized = ds.to_netcdf(*args, **kwargs)
+        # xarray 2025.09+ returns a memoryview for in-memory serialization,
+        # while this public wrapper has always promised bytes.
+        if isinstance(serialized, memoryview):
+            return serialized.tobytes()
+        return serialized
 
     def as_dict(self) -> dict:
         """Prepares dict containing metadata and values from dataset
@@ -614,7 +714,8 @@ class GeotemporalData:
         """
         vals = self.data_var.values
         ret_dict = {}
-        dimensions = []
+        dimensions: list[typing.Any] = []
+        missing_value: typing.Any = None
         ret_dict["units"] = self.data_var.attrs.get("units", "unknown")
         if "time" in self.data:
             ret_dict["times"] = (
@@ -629,13 +730,17 @@ class GeotemporalData:
             )
             ret_dict["point_coords_order"] = ["latitude", "longitude"]
             dimensions.insert(0, "point")
-            ret_dict["data"] = np.where(~np.isfinite(vals), None, vals).T.tolist()
+            ret_dict["data"] = np.where(
+                ~np.isfinite(vals), missing_value, vals
+            ).T.tolist()
         else:
             for dim in self.data_var.dims:
                 if dim != "time":
                     ret_dict[f"{dim}s"] = self.data[dim].values.flatten().tolist()
                     dimensions.append(dim)
-            ret_dict["data"] = np.where(~np.isfinite(vals), None, vals).tolist()
+            ret_dict["data"] = np.where(
+                ~np.isfinite(vals), missing_value, vals
+            ).tolist()
         ret_dict["dimensions_order"] = dimensions
         try:
             if self.data.update_in_progress and not self.data.update_is_append_only:
@@ -646,20 +751,68 @@ class GeotemporalData:
 
     def query(
         self,
-        forecast_reference_time: datetime.datetime = None,
-        point_kwargs: dict = None,
-        circle_kwargs: dict = None,
-        rectangle_kwargs: dict = None,
-        polygon_kwargs: dict = None,
-        multiple_points_kwargs: dict = None,
-        bounds: BoundsSelection = None,
-        bounds_options: dict = None,
-        spatial_agg_kwargs: dict = None,
-        temporal_agg_kwargs: dict = None,
-        rolling_agg_kwargs: dict = None,
+        forecast_reference_time: typing.Union[str, datetime.datetime, None] = None,
+        point_kwargs: typing.Optional[dict] = None,
+        circle_kwargs: typing.Optional[dict] = None,
+        rectangle_kwargs: typing.Optional[dict] = None,
+        polygon_kwargs: typing.Optional[dict] = None,
+        multiple_points_kwargs: typing.Optional[dict] = None,
+        bounds: typing.Optional[BoundsSelection] = None,
+        bounds_options: typing.Optional[dict] = None,
+        spatial_agg_kwargs: typing.Optional[dict] = None,
+        temporal_agg_kwargs: typing.Optional[dict] = None,
+        rolling_agg_kwargs: typing.Optional[dict] = None,
         time_range: typing.Optional[typing.List[datetime.datetime]] = None,
         point_limit: int = DEFAULT_POINT_LIMIT,
     ) -> "GeotemporalData":
+        if point_kwargs is not None:
+            missing = [
+                key
+                for key in ("latitude", "longitude")
+                if key not in point_kwargs or point_kwargs[key] is None
+            ]
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"point_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
+        if circle_kwargs is not None:
+            missing = []
+            if "lat" in circle_kwargs:
+                if circle_kwargs["lat"] is None:
+                    missing.append("lat")
+            elif circle_kwargs.get("center_lat") is None:
+                missing.append("center_lat" if "center_lat" in circle_kwargs else "lat")
+            if "lon" in circle_kwargs:
+                if circle_kwargs["lon"] is None:
+                    missing.append("lon")
+            elif circle_kwargs.get("center_lon") is None:
+                missing.append("center_lon" if "center_lon" in circle_kwargs else "lon")
+            if circle_kwargs.get("radius") is None:
+                missing.append("radius")
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"circle_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
+        if rectangle_kwargs is not None:
+            missing = [
+                key
+                for key in ("min_lat", "min_lon", "max_lat", "max_lon")
+                if key not in rectangle_kwargs or rectangle_kwargs[key] is None
+            ]
+            if missing:
+                raise errors.InvalidSelectionError(
+                    f"rectangle_kwargs missing required key(s): {', '.join(missing)}"
+                )
+
+        if polygon_kwargs == {}:
+            raise errors.InvalidSelectionError("polygon_kwargs must not be empty")
+        if multiple_points_kwargs == {}:
+            raise errors.InvalidSelectionError(
+                "multiple_points_kwargs must not be empty"
+            )
+
         # Filter data down temporally, then spatially, and check that the size of
         # resulting dataset fits within the limit. While a user can get the entire DS by
         # providing no filters, this will almost certainly cause the size checks to fail
@@ -669,9 +822,17 @@ class GeotemporalData:
         if point_kwargs:
             data = data.point(**point_kwargs)
         elif circle_kwargs:
-            lat = circle_kwargs.get("lat", circle_kwargs.get("center_lat"))
-            lon = circle_kwargs.get("lon", circle_kwargs.get("center_lon"))
-            radius = circle_kwargs.get("radius")
+            lat = (
+                circle_kwargs["lat"]
+                if "lat" in circle_kwargs
+                else circle_kwargs["center_lat"]
+            )
+            lon = (
+                circle_kwargs["lon"]
+                if "lon" in circle_kwargs
+                else circle_kwargs["center_lon"]
+            )
+            radius = circle_kwargs["radius"]
             data = data.circle(lat=lat, lon=lon, radius=radius)
         elif rectangle_kwargs:
             data = data.rectangle(**rectangle_kwargs)
@@ -876,12 +1037,97 @@ def _normalize_time_range_selection(
     return start, end
 
 
+def _sliceable_coordinate(data: xr.Dataset, key: str) -> bool:
+    """True when ``key`` is a 1-D, NaN-free, monotonic dimension index.
+
+    Only such coordinates can be selected with ``.sel(slice)``; anything
+    else (non-index coords, curvilinear grids, unsorted or NaN-holding
+    coords) must go through the mask-based fallback paths.
+    """
+    coord = data[key]
+    if coord.ndim != 1 or coord.dims[0] != key or key not in data.xindexes:
+        return False
+    index = data.indexes[key]
+    if index.hasnans:
+        return False
+    return bool(index.is_monotonic_increasing or index.is_monotonic_decreasing)
+
+
+def _coordinate_slice(
+    coordinate: xr.DataArray, minimum: float, maximum: float
+) -> slice:
+    if coordinate.size == 0:
+        return slice(minimum, maximum)
+
+    dimension = coordinate.dims[0]
+    first = coordinate.isel({dimension: 0}).values.item()
+    last = coordinate.isel({dimension: -1}).values.item()
+    if first <= last:
+        return slice(minimum, maximum)
+    return slice(maximum, minimum)
+
+
+def _circle_bounding_box(
+    lat: float,
+    lon: float,
+    radius: float,
+    latitudes: xr.DataArray,
+    longitudes: xr.DataArray,
+) -> typing.Optional[tuple[float, float, float, float]]:
+    values = (lat, lon, radius)
+    if not all(isinstance(value, numbers.Real) for value in values):
+        return None
+    if not all(math.isfinite(value) for value in values) or radius < 0:
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    if latitudes.size == 0 or longitudes.size == 0:
+        return None
+
+    latitude_dimension = latitudes.dims[0]
+    longitude_dimension = longitudes.dims[0]
+    coordinate_endpoints: tuple[typing.Any, ...] = (
+        latitudes.isel({latitude_dimension: 0}).values.item(),
+        latitudes.isel({latitude_dimension: -1}).values.item(),
+        longitudes.isel({longitude_dimension: 0}).values.item(),
+        longitudes.isel({longitude_dimension: -1}).values.item(),
+    )
+    if not all(
+        isinstance(value, numbers.Real) and math.isfinite(value)
+        for value in coordinate_endpoints
+    ):
+        return None
+    if not all(-90 <= value <= 90 for value in coordinate_endpoints[:2]):
+        return None
+    if not all(-180 <= value <= 180 for value in coordinate_endpoints[2:]):
+        return None
+
+    angular_radius = radius / 6371
+    angular_radius_degrees = math.degrees(angular_radius)
+    pad = 1e-9  # ~0.1 mm; dwarfs haversine float error (~1e-11 degrees)
+    min_lat = max(-90, lat - angular_radius_degrees - pad)
+    max_lat = min(90, lat + angular_radius_degrees + pad)
+
+    latitude_radians = math.radians(lat)
+    if angular_radius >= math.pi / 2 - abs(latitude_radians):
+        return min_lat, -180, max_lat, 180
+
+    longitude_radius = math.degrees(
+        math.asin(math.sin(angular_radius) / math.cos(latitude_radians))
+    )
+    min_lon = lon - longitude_radius - pad
+    max_lon = lon + longitude_radius + pad
+    if min_lon < -180 or max_lon > 180:
+        return None
+    return min_lat, min_lon, max_lat, max_lon
+
+
 def _haversine(
-    lat1: typing.Union[np.ndarray, float],
-    lon1: typing.Union[np.ndarray, float],
-    lat2: typing.Union[np.ndarray, float],
-    lon2: typing.Union[np.ndarray, float],
-) -> typing.Union[np.ndarray, float]:
+    lat1: typing.Union[np.ndarray, xr.DataArray, float],
+    lon1: typing.Union[np.ndarray, xr.DataArray, float],
+    lat2: typing.Union[np.ndarray, xr.DataArray, float],
+    lon2: typing.Union[np.ndarray, xr.DataArray, float],
+) -> typing.Union[np.ndarray, xr.DataArray, float]:
     """Calculates arclength distance in km between coordinate pairs,
         assuming the earth is a perfect sphere
 

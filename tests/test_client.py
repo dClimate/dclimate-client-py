@@ -21,11 +21,6 @@ from .conftest import (
     KNOWN_STAC_DATE_END,
 )
 
-# --- Test Markers ---
-# pytestmark = pytest.mark.client # Mark tests specific to the client module
-# Apply IPFS check fixture to relevant tests/module if not session-wide autouse
-pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
-
 # Keep S3 sample path if needed for S3 tests
 SAMPLE_ZARRS = pathlib.Path(__file__).parent / "etc" / "sample_zarrs"
 

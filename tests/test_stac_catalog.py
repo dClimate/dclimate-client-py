@@ -1,25 +1,24 @@
 """
 Comprehensive tests for STAC catalog integration module.
 
-Tests all functions and classes in stac_catalog.py using real data from the dClimate IPFS gateway.
-No mocking is used - all tests interact with actual STAC catalog data.
+Tests all functions and classes in stac_catalog.py. Integration cases use the
+real dClimate IPFS gateway; isolated protocol cases use httpx MockTransport.
 """
 
+import httpx
 import pytest
 import pystac
 from dclimate_client_py import stac_catalog
+from tests.ipfs_config import IPFS_GATEWAY_URL, STAC_CATALOG_URL
 
 
-# Mark all tests in this module to use the IPFS connection check
-pytestmark = pytest.mark.usefixtures("check_ipfs_connection")
-
-
+@pytest.mark.stac_pointer
 class TestGetRootCatalogCid:
     """Test the get_root_catalog_cid function."""
 
     def test_get_root_catalog_cid_returns_string(self):
         """Test that get_root_catalog_cid returns a non-empty string CID."""
-        cid = stac_catalog.get_root_catalog_cid()
+        cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
 
         assert isinstance(cid, str)
         assert len(cid) > 0
@@ -28,8 +27,8 @@ class TestGetRootCatalogCid:
 
     def test_get_root_catalog_cid_consistent(self):
         """Test that multiple calls return consistent CID format."""
-        cid1 = stac_catalog.get_root_catalog_cid()
-        cid2 = stac_catalog.get_root_catalog_cid()
+        cid1 = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
+        cid2 = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
 
         # Both should be valid CIDs
         assert isinstance(cid1, str)
@@ -58,13 +57,15 @@ class TestIPFSStacIO:
         assert stac_io.gateway_url == "https://ipfs-gateway.dclimate.net"
         assert not stac_io.gateway_url.endswith("/")
 
+    @pytest.mark.ipfs
+    @pytest.mark.stac_pointer
     def test_read_text_with_ipfs_uri(self):
         """Test reading content from ipfs:// URI via gateway."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get a real CID from the catalog
-        root_cid = stac_catalog.get_root_catalog_cid()
+        root_cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
         ipfs_uri = f"ipfs://{root_cid}"
 
         # Read the content
@@ -79,13 +80,15 @@ class TestIPFSStacIO:
         assert "type" in catalog_data
         assert catalog_data["type"] in ["Catalog", "Collection"]
 
+    @pytest.mark.ipfs
+    @pytest.mark.stac_pointer
     def test_read_text_handles_ipfs_uri_correctly(self):
         """Test that IPFS URIs are properly transformed to gateway HTTP URLs."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get a real CID to test with
-        root_cid = stac_catalog.get_root_catalog_cid()
+        root_cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
 
         # Test that ipfs:// URI is handled
         ipfs_uri = f"ipfs://{root_cid}"
@@ -101,13 +104,15 @@ class TestIPFSStacIO:
         data = json.loads(content)
         assert "type" in data
 
+    @pytest.mark.ipfs
+    @pytest.mark.stac_pointer
     def test_read_text_multiple_cids(self):
         """Test reading from multiple different CIDs."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
         stac_io = stac_catalog.IPFSStacIO(gateway_url)
 
         # Get root CID and load catalog
-        root_cid = stac_catalog.get_root_catalog_cid()
+        root_cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
         ipfs_uri = f"ipfs://{root_cid}"
 
         # First read
@@ -120,6 +125,33 @@ class TestIPFSStacIO:
         assert isinstance(content2, str)
         assert content1 == content2
 
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_read_text_fetches_http_urls(self, scheme):
+        requested_url = f"{scheme}://catalog.example/root.json"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == requested_url
+            return httpx.Response(200, text='{"type": "Catalog"}', request=request)
+
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        stac_io.client.close()
+        stac_io.client = httpx.Client(transport=httpx.MockTransport(handler))
+        try:
+            assert stac_io.read_text(requested_url) == '{"type": "Catalog"}'
+        finally:
+            stac_io.close()
+
+    @pytest.mark.parametrize(
+        "source", ["file:///tmp/catalog.json", "s3://bucket/catalog.json"]
+    )
+    def test_read_text_rejects_unsupported_schemes(self, source):
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        try:
+            with pytest.raises(ValueError, match=source.split(":", 1)[0]):
+                stac_io.read_text(source)
+        finally:
+            stac_io.close()
+
     def test_write_text_raises_not_implemented(self):
         """Test that write_text raises NotImplementedError."""
         gateway_url = "https://ipfs-gateway.dclimate.net"
@@ -131,14 +163,18 @@ class TestIPFSStacIO:
         assert "not supported" in str(exc_info.value).lower()
 
 
+@pytest.mark.ipfs
+@pytest.mark.stac_pointer
 class TestLoadStacCatalog:
     """Test the load_stac_catalog function."""
 
     def test_load_catalog_with_auto_cid(self):
         """Test loading catalog with automatically fetched CID."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
 
-        catalog = stac_catalog.load_stac_catalog(gateway_url)
+        catalog = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
 
         assert isinstance(catalog, pystac.Catalog)
         assert catalog.id is not None
@@ -146,8 +182,8 @@ class TestLoadStacCatalog:
 
     def test_load_catalog_with_explicit_cid(self):
         """Test loading catalog with explicitly provided CID."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        root_cid = stac_catalog.get_root_catalog_cid()
+        gateway_url = IPFS_GATEWAY_URL
+        root_cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
 
         catalog = stac_catalog.load_stac_catalog(gateway_url, root_cid=root_cid)
 
@@ -156,8 +192,10 @@ class TestLoadStacCatalog:
 
     def test_loaded_catalog_has_children(self):
         """Test that loaded catalog has child links (collections)."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        catalog = stac_catalog.load_stac_catalog(gateway_url)
+        gateway_url = IPFS_GATEWAY_URL
+        catalog = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
 
         child_links = list(catalog.get_child_links())
         assert len(child_links) > 0
@@ -170,8 +208,10 @@ class TestLoadStacCatalog:
 
     def test_catalog_collections_are_accessible(self):
         """Test that collections in the catalog can be resolved and accessed."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        catalog = stac_catalog.load_stac_catalog(gateway_url)
+        gateway_url = IPFS_GATEWAY_URL
+        catalog = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
 
         # Get first child link
         child_links = list(catalog.get_child_links())
@@ -186,14 +226,16 @@ class TestLoadStacCatalog:
         assert isinstance(collection, (pystac.Collection, pystac.Catalog))
 
 
+@pytest.mark.ipfs
+@pytest.mark.stac_pointer
 class TestResolveDatasetCidFromStac:
     """Test the resolve_dataset_cid_from_stac function."""
 
     @pytest.fixture
     def loaded_catalog(self):
         """Fixture providing a loaded STAC catalog."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        return stac_catalog.load_stac_catalog(gateway_url)
+        gateway_url = IPFS_GATEWAY_URL
+        return stac_catalog.load_stac_catalog(gateway_url, catalog_url=STAC_CATALOG_URL)
 
     def test_resolve_dataset_cid_basic(self, loaded_catalog):
         """Test resolving a dataset CID from the catalog."""
@@ -214,16 +256,16 @@ class TestResolveDatasetCidFromStac:
             pytest.skip("No datasets available in catalog")
 
         # Try to resolve the CID
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog, collection=collection_id, dataset=dataset_type
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
         # Should not have ipfs:// prefix
-        assert not cid.startswith("ipfs://")
+        assert not resolved.cid.startswith("ipfs://")
         # Should be a valid CID format
-        assert cid.startswith(("Qm", "bafy", "bafk", "bafz"))
+        assert resolved.cid.startswith(("Qm", "bafy", "bafk", "bafz"))
 
     def test_resolve_dataset_cid_with_variant(self, loaded_catalog):
         """Test resolving a dataset CID with a specific variant."""
@@ -264,7 +306,7 @@ class TestResolveDatasetCidFromStac:
         item_dataset = parts[1]
         item_variant = parts[2]
 
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog,
             collection=item_collection,
             dataset=item_dataset,
@@ -272,9 +314,9 @@ class TestResolveDatasetCidFromStac:
             organization=organization_id,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
-        assert not cid.startswith("ipfs://")
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
+        assert not resolved.cid.startswith("ipfs://")
 
     def test_resolve_dataset_cid_invalid_collection(self, loaded_catalog):
         """Test that invalid collection raises ValueError."""
@@ -335,14 +377,16 @@ class TestResolveDatasetCidFromStac:
         assert "variant" in str(exc_info.value).lower()
 
 
+@pytest.mark.ipfs
+@pytest.mark.stac_pointer
 class TestListAvailableDatasets:
     """Test the list_available_datasets function."""
 
     @pytest.fixture
     def loaded_catalog(self):
         """Fixture providing a loaded STAC catalog."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        return stac_catalog.load_stac_catalog(gateway_url)
+        gateway_url = IPFS_GATEWAY_URL
+        return stac_catalog.load_stac_catalog(gateway_url, catalog_url=STAC_CATALOG_URL)
 
     def test_list_datasets_returns_dict(self, loaded_catalog):
         """Test that list_available_datasets returns a dictionary."""
@@ -424,17 +468,19 @@ class TestListAvailableDatasets:
             assert len(collection_id) > 0
 
 
+@pytest.mark.ipfs
+@pytest.mark.stac_pointer
 class TestIntegrationEndToEnd:
     """Integration tests that exercise the full workflow."""
 
     def test_full_workflow_load_and_resolve(self):
         """Test the complete workflow: get CID, load catalog, resolve dataset."""
         # Step 1: Get root catalog CID
-        root_cid = stac_catalog.get_root_catalog_cid()
+        root_cid = stac_catalog.get_root_catalog_cid(STAC_CATALOG_URL)
         assert isinstance(root_cid, str)
 
         # Step 2: Load catalog
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
         catalog = stac_catalog.load_stac_catalog(gateway_url, root_cid=root_cid)
         assert isinstance(catalog, pystac.Catalog)
 
@@ -452,19 +498,23 @@ class TestIntegrationEndToEnd:
                 break
 
         if collection_id and dataset_type:
-            cid = stac_catalog.resolve_dataset_cid_from_stac(
+            resolved = stac_catalog.resolve_dataset_cid_from_stac(
                 catalog, collection=collection_id, dataset=dataset_type
             )
-            assert isinstance(cid, str)
-            assert len(cid) > 0
+            assert isinstance(resolved.cid, str)
+            assert len(resolved.cid) > 0
 
     def test_multiple_catalog_loads_work(self):
         """Test that multiple catalog loads don't interfere with each other."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
+        gateway_url = IPFS_GATEWAY_URL
 
         # Load catalog twice
-        catalog1 = stac_catalog.load_stac_catalog(gateway_url)
-        catalog2 = stac_catalog.load_stac_catalog(gateway_url)
+        catalog1 = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
+        catalog2 = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
 
         # Both should be valid
         assert isinstance(catalog1, pystac.Catalog)
@@ -476,8 +526,10 @@ class TestIntegrationEndToEnd:
 
     def test_catalog_navigation(self):
         """Test navigating through catalog hierarchy."""
-        gateway_url = "https://ipfs-gateway.dclimate.net"
-        catalog = stac_catalog.load_stac_catalog(gateway_url)
+        gateway_url = IPFS_GATEWAY_URL
+        catalog = stac_catalog.load_stac_catalog(
+            gateway_url, catalog_url=STAC_CATALOG_URL
+        )
 
         # Get child links
         child_links = list(catalog.get_child_links())
