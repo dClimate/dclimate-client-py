@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import gc
 from datetime import datetime, timezone
+import json
 from typing import Any
 from unittest.mock import Mock
 
+import httpx
 import pystac
 import pytest
 
 from dclimate_client_py import ipfs_retrieval, stac_catalog, stac_server
+
+
+_install_mock_client = None
+
+
+@pytest.fixture(autouse=True)
+def _use_managed_httpx_clients(install_httpx_mock):
+    global _install_mock_client
+    _install_mock_client = install_httpx_mock
+    yield
+    _install_mock_client = None
 
 
 class _Response:
@@ -20,6 +33,23 @@ class _Response:
 
     def raise_for_status(self) -> None:
         return None
+
+
+def _install_post(monkeypatch, post) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        kwargs = {
+            "json": json.loads(request.content),
+            "timeout": request.extensions["timeout"]["read"],
+        }
+        if "authorization" in request.headers:
+            kwargs["headers"] = {
+                "Authorization": request.headers["authorization"],
+            }
+        response = post(str(request.url), **kwargs)
+        return httpx.Response(200, json=response._payload, request=request)
+
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
 
 
 def _catalog_with_item(item: pystac.Item) -> pystac.Catalog:
@@ -63,9 +93,8 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
         "properties": properties,
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -85,7 +114,7 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
             dataset="precip-daily",
             variant="final-p05",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert (
@@ -95,7 +124,7 @@ def test_stac_resolvers_honor_hyphenated_dataset_and_variant(monkeypatch):
             dataset="precip-daily",
             variant="final-p05",
             organization="org",
-        )
+        ).cid
         == cid
     )
 
@@ -143,16 +172,16 @@ def test_stac_server_follows_next_link_to_resolve_later_item(monkeypatch):
         calls.append((url, json))
         return _Response(pages[len(calls) - 1])
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
-    cid = stac_server.resolve_cid_from_stac_server(
+    resolved = stac_server.resolve_cid_from_stac_server(
         collection=collection,
         dataset="target",
         variant="finalized",
         server_url="https://example.test",
     )
 
-    assert cid == "bafy-page-two-target"
+    assert resolved.cid == "bafy-page-two-target"
     assert len(calls) == 2
 
 
@@ -174,9 +203,8 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
         "collection": "chirps",
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -196,7 +224,7 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
             dataset="temp",
             variant="default",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert (
@@ -206,7 +234,7 @@ def test_stac_resolvers_agree_on_default_variant_for_bare_items(monkeypatch):
             dataset="temp",
             variant="default",
             organization="org",
-        )
+        ).cid
         == cid
     )
 
@@ -220,9 +248,8 @@ def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch)
         "collection": "chirps",
         "assets": {"data": {"href": f"ipfs://{cid}"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": [feature]}),
     )
 
@@ -232,7 +259,7 @@ def test_stac_server_resolves_hyphenated_variant_without_properties(monkeypatch)
             dataset="precip-daily",
             variant="final-p05",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
 
@@ -279,7 +306,7 @@ def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     assert (
         stac_server.resolve_cid_from_stac_server(
@@ -287,7 +314,7 @@ def test_stac_server_merge_next_link_keeps_collections_filter(monkeypatch):
             dataset="temp",
             variant="final",
             server_url="https://example.test",
-        )
+        ).cid
         == cid
     )
     assert bodies[1]["token"] == "page-2"
@@ -318,7 +345,7 @@ def test_stac_server_merge_next_link_without_body_keeps_original_body_and_header
             )
         return _Response({"features": []})
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     list(
         stac_server._search_pages(
@@ -396,13 +423,13 @@ def test_stac_server_default_variant_can_be_on_a_later_page(monkeypatch):
         calls += 1
         return response
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
-    cid = stac_server.resolve_cid_from_stac_server(
+    resolved = stac_server.resolve_cid_from_stac_server(
         "chirps", "temp", server_url="https://example.test"
     )
 
-    assert cid == "bafy-default"
+    assert resolved.cid == "bafy-default"
     assert calls == 2
 
 
@@ -421,9 +448,8 @@ def test_known_hyphenated_dataset_does_not_match_shorter_prefix(monkeypatch):
         },
         "assets": {"data": {"href": "ipfs://bafy-explicit-sibling"}},
     }
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response(
             {"features": [legacy_feature, explicit_sibling]}
         ),
@@ -471,20 +497,19 @@ def test_requested_hyphenated_dataset_is_a_disambiguation_candidate(monkeypatch)
             "assets": {"data": {"href": "ipfs://bafy-precip-default"}},
         },
     ]
-    monkeypatch.setattr(
-        stac_server.requests,
-        "post",
+    _install_post(
+        monkeypatch,
         lambda *args, **kwargs: _Response({"features": features}),
     )
 
-    cid = stac_server.resolve_cid_from_stac_server(
+    resolved = stac_server.resolve_cid_from_stac_server(
         "chirps",
         "precip-daily",
         variant="final",
         server_url="https://example.test",
     )
 
-    assert cid == "bafy-precip-daily-final"
+    assert resolved.cid == "bafy-precip-daily-final"
 
 
 def test_catalog_requested_dataset_is_a_disambiguation_candidate():
@@ -549,9 +574,9 @@ def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch)
     assert observed["stac_io"].gateway_url == "https://gateway-a.test"
 
 
-def test_load_stac_catalog_closes_session_when_parsing_fails(monkeypatch):
-    session = Mock()
-    monkeypatch.setattr(stac_catalog.requests, "Session", lambda: session)
+def test_load_stac_catalog_closes_client_when_parsing_fails(monkeypatch):
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: None))
+    monkeypatch.setattr(stac_catalog.httpx, "Client", lambda *args, **kwargs: client)
 
     def fail_from_file(cls, href, stac_io=None):
         raise RuntimeError("invalid catalog")
@@ -561,12 +586,12 @@ def test_load_stac_catalog_closes_session_when_parsing_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="invalid catalog"):
         stac_catalog.load_stac_catalog("https://gateway.test", root_cid="bafy-invalid")
 
-    session.close.assert_called_once_with()
+    assert client.is_closed
 
 
-def test_load_stac_catalog_closes_session_when_catalog_is_released(monkeypatch):
-    session = Mock()
-    monkeypatch.setattr(stac_catalog.requests, "Session", lambda: session)
+def test_load_stac_catalog_closes_client_when_catalog_is_released(monkeypatch):
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: None))
+    monkeypatch.setattr(stac_catalog.httpx, "Client", lambda *args, **kwargs: client)
     monkeypatch.setattr(
         pystac.Catalog,
         "from_file",
@@ -580,18 +605,20 @@ def test_load_stac_catalog_closes_session_when_catalog_is_released(monkeypatch):
     catalog = stac_catalog.load_stac_catalog(
         "https://gateway.test", root_cid="bafy-root"
     )
-    session.close.assert_not_called()
+    assert not client.is_closed
 
     del catalog
     gc.collect()
 
-    session.close.assert_called_once_with()
+    assert client.is_closed
 
 
 def test_load_stac_catalog_uses_configured_pointer_endpoint(monkeypatch):
     response = Mock()
     response.json.return_value = {"cid": "bafy-configured-root"}
-    monkeypatch.setattr(stac_catalog.requests, "get", Mock(return_value=response))
+    pointer_client = Mock()
+    pointer_client.get.return_value = response
+    monkeypatch.setattr(stac_catalog, "_client", lambda: pointer_client)
     observed = {}
 
     def from_file(cls, href, stac_io=None):
@@ -604,10 +631,61 @@ def test_load_stac_catalog_uses_configured_pointer_endpoint(monkeypatch):
         "https://gateway.test", catalog_url="https://control.test/catalog-root"
     )
 
-    stac_catalog.requests.get.assert_called_once_with(
-        "https://control.test/catalog-root", timeout=30
+    pointer_client.get.assert_called_once_with(
+        "https://control.test/catalog-root", timeout=30, headers=None, auth=None
     )
     assert observed["href"] == "ipfs://bafy-configured-root"
+
+
+def test_load_stac_catalog_threads_gateway_credentials(monkeypatch):
+    """Auth/headers must reach both the pointer fetch and gateway I/O.
+
+    Regression guard: authenticated gateways previously 401'd on catalog
+    fallback because credentials were dropped between the KuboCAS data path
+    and the STAC catalog reads.
+    """
+    headers = {"Authorization": "Bearer token"}
+    auth = ("user", "secret")
+
+    response = Mock()
+    response.json.return_value = {"cid": "bafy-auth-root"}
+    pointer_client = Mock()
+    pointer_client.get.return_value = response
+    monkeypatch.setattr(stac_catalog, "_client", lambda: pointer_client)
+
+    captured: dict[str, Any] = {}
+
+    def recording_init(self, gateway_url, *, headers=None, auth=None):
+        captured["gateway_url"] = gateway_url
+        captured["headers"] = headers
+        captured["auth"] = auth
+        self.gateway_url = gateway_url.rstrip("/")
+        self.client = Mock()
+
+    monkeypatch.setattr(stac_catalog.IPFSStacIO, "__init__", recording_init)
+
+    def from_file(cls, href, stac_io=None):
+        return pystac.Catalog(id="root", description="Root")
+
+    monkeypatch.setattr(pystac.Catalog, "from_file", classmethod(from_file))
+
+    stac_catalog.load_stac_catalog(
+        "https://gateway.test",
+        catalog_url="https://control.test/catalog-root",
+        headers=headers,
+        auth=auth,
+    )
+
+    # Pointer endpoint (same host as the gateway) carries the credentials.
+    pointer_client.get.assert_called_once_with(
+        "https://control.test/catalog-root",
+        timeout=30,
+        headers=headers,
+        auth=auth,
+    )
+    # Gateway I/O handler is constructed with the credentials too.
+    assert captured["headers"] == headers
+    assert captured["auth"] == auth
 
 
 def test_catalog_lister_uses_dataset_metadata_for_partial_item_properties():

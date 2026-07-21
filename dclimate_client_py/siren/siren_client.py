@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import inspect
 import os
+from collections.abc import Mapping
 from typing import Any, Optional, TypeGuard
 from urllib.parse import quote
 
@@ -200,7 +201,9 @@ def _build_x402_client(x402_client_class: Any, facilitator_url: str | None) -> A
         return x402_client_class()
 
     try:
-        params = inspect.signature(x402_client_class).parameters
+        params: Mapping[str, inspect.Parameter] = inspect.signature(
+            x402_client_class
+        ).parameters
     except (TypeError, ValueError):
         params = {}
 
@@ -401,14 +404,18 @@ class SirenClient:
             client = x402Client()
             for network in _network_preferences(self._auth.network):
                 client.register_policy(prefer_network(network))
-            register_exact_evm_client(client, self._auth.signer)
+            register_exact_evm_client(
+                client,
+                self._auth.signer,  # type: ignore[arg-type]
+            )
 
-            self._x402_http_client = x402HttpxClient(client, timeout=self._timeout)
+            http_client = x402HttpxClient(client, timeout=self._timeout)
+            self._x402_http_client = http_client
 
             async def wrapped_fetch(
                 url: str, method: str = "GET", **kwargs: Any
             ) -> httpx.Response:
-                return await self._x402_http_client.request(method, url, **kwargs)
+                return await http_client.request(method, url, **kwargs)
 
             self._x402_fetch = wrapped_fetch
             return self._x402_fetch

@@ -134,7 +134,7 @@ def test_ipfs_rpc_probe_requires_successful_kubo_identity(
     class Response:
         def raise_for_status(self):
             if status >= 400:
-                raise suite_conftest.requests.HTTPError(f"HTTP {status}")
+                raise suite_conftest.httpx.HTTPError(f"HTTP {status}")
 
         def json(self):
             if isinstance(payload, Exception):
@@ -142,7 +142,7 @@ def test_ipfs_rpc_probe_requires_successful_kubo_identity(
             return payload
 
     monkeypatch.setattr(
-        suite_conftest.requests, "post", lambda *args, **kwargs: Response()
+        suite_conftest.httpx, "post", lambda *args, **kwargs: Response()
     )
 
     assert suite_conftest.is_ipfs_rpc_running("https://rpc.example") is expected
@@ -163,15 +163,13 @@ def test_stac_pointer_probe_requires_successful_root_cid(
     class Response:
         def raise_for_status(self):
             if status >= 400:
-                raise suite_conftest.requests.HTTPError(f"HTTP {status}")
+                raise suite_conftest.httpx.HTTPError(f"HTTP {status}")
 
         def json(self):
             if isinstance(payload, Exception):
                 raise payload
             return payload
 
-    monkeypatch.setattr(
-        suite_conftest.requests, "get", lambda *args, **kwargs: Response()
-    )
+    monkeypatch.setattr(suite_conftest.httpx, "get", lambda *args, **kwargs: Response())
 
     assert suite_conftest.is_stac_pointer_running("https://catalog.example") is expected

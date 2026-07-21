@@ -6,7 +6,7 @@ build-backend = "pdm.backend"
 
 [project]
 name = "dclimate-client-py"
-version = "0.5.11" # Set a static version or handle it in versioning strategy
+version = "0.6.0" # Set a static version or handle it in versioning strategy
 description = "Python client library for accessing dClimate weather and climate data"
 readme = "README.md"
 license = {text = "MIT"}
@@ -38,10 +38,8 @@ dependencies = [
     # while py-hamt 3.x currently constrains zarr below 3.1.
     "numcodecs[crc32c]>=0.14,<0.16",
     "numpy>=2.1.3",
-    "py_hamt>=3.4.1",
+    "py_hamt>=3.5.0",
     "multiformats>=0.3.1",
-    "requests>=2.31.0",
-    "urllib3>=2.0.0",
     "geopandas>=1.0.0",
     "pandas>=2.2.0",
     "s3fs>=2024.6.0",
@@ -60,14 +58,15 @@ dependencies = [
 Homepage = "https://dclimate.net/"
 
 [project.optional-dependencies]
-testing = ["pytest", "pytest-cov", "pytest-mock", "pytest-asyncio>=1.3.0"]
+testing = [
+    "mypy>=1.14",
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "pytest-asyncio>=1.3.0",
+]
 dev = ["pre-commit>=4.1.0", "ruff>=0.9.5"]
 examples = ["python-dotenv>=1.0.0"]
-
-[tool.uv.sources]
-# Development integration pin for py-hamt PR #88. Published artifacts retain
-# the released runtime floor because PyPI rejects direct-URL requirements.
-py_hamt = { git = "https://github.com/dClimate/py-hamt", rev = "942580df089be13d6b8b803fc942932d65f2fc7f" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -80,3 +79,7 @@ markers = [
     "integration: marks integration tests (often slower, may require external services like IPFS)",
     # Add other custom marks here if you create more
 ]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true

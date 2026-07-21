@@ -13,6 +13,7 @@ from .datasets import (
     TemporalExtent,
 )
 from .stac_server import (
+    ResolvedDataset,
     resolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
     STAC_SERVER_URL,
@@ -74,6 +75,7 @@ __all__ = [
     "TemporalExtent",
     "load_stac_catalog",
     "list_available_datasets",
+    "ResolvedDataset",
     "resolve_cid_from_stac_server",
     "list_available_datasets_from_stac_server",
     "STAC_SERVER_URL",

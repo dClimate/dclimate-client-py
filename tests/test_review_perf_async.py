@@ -2,30 +2,20 @@ import asyncio
 import time
 from unittest.mock import AsyncMock
 
+import httpx
 import xarray as xr
 
 from dclimate_client_py import dclimate_client, stac_catalog, stac_server
 
 
-class _Response:
-    def __init__(self, *, payload=None, text=""):
-        self._payload = payload
-        self.text = text
-
-    def raise_for_status(self):
-        return None
-
-    def json(self):
-        return self._payload
-
-
-async def test_load_dataset_does_not_stall_event_loop(monkeypatch):
+async def test_load_dataset_does_not_stall_event_loop(monkeypatch, install_httpx_mock):
     fake_cid = "bafy-fake-dataset-cid"
 
-    def slow_stac_search(url, *, json, timeout):
+    def slow_stac_search(request: httpx.Request) -> httpx.Response:
         time.sleep(0.25)
-        return _Response(
-            payload={
+        return httpx.Response(
+            200,
+            json={
                 "features": [
                     {
                         "id": "example_temperature_default",
@@ -37,14 +27,15 @@ async def test_load_dataset_does_not_stall_event_loop(monkeypatch):
                         "assets": {"data": {"href": f"ipfs://{fake_cid}"}},
                     }
                 ]
-            }
+            },
+            request=request,
         )
 
     async def load_from_ipfs(**kwargs):
         assert kwargs["ipfs_cid"] == fake_cid
         return xr.Dataset({"temperature": ("time", [21.0])}, coords={"time": [0]})
 
-    monkeypatch.setattr(stac_server.requests, "post", slow_stac_search)
+    install_httpx_mock(stac_server, slow_stac_search)
     monkeypatch.setattr(dclimate_client, "_load_dataset_from_ipfs_cid", load_from_ipfs)
 
     client = dclimate_client.dClimateClient(stac_server_url="https://stac.invalid")
@@ -78,32 +69,33 @@ async def test_load_dataset_does_not_stall_event_loop(monkeypatch):
     assert max_tick_gap < 0.15, f"event loop stalled for {max_tick_gap:.3f}s"
 
 
-def test_ipfs_stac_io_reuses_session(monkeypatch):
-    bare_get_calls = []
-    sessions = []
+def test_ipfs_stac_io_reuses_client(monkeypatch):
+    get_calls: list[str] = []
+    clients: list[httpx.Client] = []
+    httpx_client = httpx.Client
 
-    def bare_get(url, *args, **kwargs):
-        bare_get_calls.append(url)
-        return _Response(text="{}")
+    def handler(request: httpx.Request) -> httpx.Response:
+        get_calls.append(str(request.url))
+        return httpx.Response(200, text="{}", request=request)
 
-    class RecordingSession:
-        def __init__(self):
-            self.get_calls = []
-            sessions.append(self)
+    def client_factory(*args, **kwargs):
+        client = httpx_client(
+            *args,
+            **kwargs,
+            transport=httpx.MockTransport(handler),
+        )
+        clients.append(client)
+        return client
 
-        def get(self, url, *args, **kwargs):
-            self.get_calls.append(url)
-            return _Response(text="{}")
-
-    monkeypatch.setattr(stac_catalog.requests, "get", bare_get)
-    monkeypatch.setattr(stac_catalog.requests, "Session", RecordingSession)
+    monkeypatch.setattr(stac_catalog.httpx, "Client", client_factory)
 
     stac_io = stac_catalog.IPFSStacIO("https://gateway.invalid")
-    for index in range(5):
-        assert stac_io.read_text(f"ipfs://fake-cid-{index}") == "{}"
+    try:
+        for index in range(5):
+            assert stac_io.read_text(f"ipfs://fake-cid-{index}") == "{}"
+    finally:
+        stac_io.close()
 
-    assert bare_get_calls == [], (
-        f"expected pooled requests, but requests.get was called {len(bare_get_calls)} times"
-    )
-    assert len(sessions) == 1
-    assert len(sessions[0].get_calls) == 5
+    assert len(clients) == 1
+    assert stac_io.client is clients[0]
+    assert len(get_calls) == 5

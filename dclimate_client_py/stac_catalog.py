@@ -5,23 +5,45 @@ This module provides integration with STAC (SpatioTemporal Asset Catalog) format
 for discovering and accessing dClimate datasets stored on IPFS.
 """
 
-from typing import Optional, Dict, List, Set, Tuple, Any
+from os import PathLike, fspath
+from typing import Optional, Dict, List, Set, Tuple, Any, cast
 import logging
 import weakref
-import requests
+from threading import Lock
+from urllib.parse import urlsplit
+
+import httpx
 import pystac
 
 from .datasets import SpatialExtent, TemporalExtent
 from .stac_server import (
+    ResolvedDataset,
     _dataset_and_variant_from_item_id,
     _dataset_and_variant_from_known_datasets,
 )
 
 logger = logging.getLogger(__name__)
 STAC_CATALOG_URL = "https://ipfs-gateway.dclimate.net/stac"
+_HTTP_CLIENT: httpx.Client | None = None
+_HTTP_CLIENT_LOCK = Lock()
 
 
-def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
+def _client() -> httpx.Client:
+    """Return the process-wide pooled client used for synchronous STAC reads."""
+    global _HTTP_CLIENT
+    if _HTTP_CLIENT is None:
+        with _HTTP_CLIENT_LOCK:
+            if _HTTP_CLIENT is None:
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+    return _HTTP_CLIENT
+
+
+def get_root_catalog_cid(
+    catalog_url: str = STAC_CATALOG_URL,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    auth: Optional[Tuple[str, str]] = None,
+) -> str:
     """
     Get the root STAC catalog CID.
 
@@ -29,15 +51,21 @@ def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
 
     Args:
         catalog_url: URL of the dClimate STAC root-CID pointer endpoint.
+        headers: Optional default headers for the request. The pointer endpoint
+            lives on the IPFS gateway host, so authenticated gateways need the
+            same credentials here as for ``/ipfs`` reads.
+        auth: Optional ``(username, password)`` basic-auth pair for the request.
 
     Returns:
         str: The IPFS CID of the root STAC catalog
 
     Raises:
-        requests.HTTPError: If the API request fails
+        httpx.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
-    response = requests.get(catalog_url, timeout=30)
+    # The pooled client is process-wide and gateway-agnostic, so credentials are
+    # applied per-request rather than baked into the shared client.
+    response = _client().get(catalog_url, timeout=30, headers=headers, auth=auth)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -84,7 +112,9 @@ def _resolve_child_by_dclimate_id(
     """Resolve a catalog child by its dclimate:id extra field."""
     for link in parent.get_child_links():
         if link.extra_fields.get("dclimate:id") == child_id:
-            return link.resolve_stac_object(root=parent).target, link
+            return cast(
+                pystac.Catalog, link.resolve_stac_object(root=parent).target
+            ), link
     return None, None
 
 
@@ -103,13 +133,16 @@ def _resolve_child_by_collection_slug(
         if collection_slug not in collections:
             continue
 
-        org_catalog = link.resolve_stac_object(root=parent).target
+        org_catalog = cast(pystac.Catalog, link.resolve_stac_object(root=parent).target)
         if org_catalog is None:
             continue
 
         for col_link in org_catalog.get_child_links():
             if col_link.extra_fields.get("dclimate:id") == collection_slug:
-                return col_link.resolve_stac_object(root=org_catalog).target, col_link
+                return cast(
+                    pystac.Catalog,
+                    col_link.resolve_stac_object(root=org_catalog).target,
+                ), col_link
 
     return None, None
 
@@ -122,25 +155,43 @@ class IPFSStacIO(pystac.StacIO):
     that are stored on IPFS and referenced using ipfs:// protocol URIs.
     """
 
-    def __init__(self, gateway_url: str):
+    def __init__(
+        self,
+        gateway_url: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ):
         """
         Initialize the IPFS STAC I/O handler.
 
         Args:
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
+            headers: Optional default headers applied to every gateway request.
+                Required for authenticated gateways so catalog fallback does not
+                fail with 401.
+            auth: Optional ``(username, password)`` basic-auth pair applied to
+                every gateway request.
         """
         self.gateway_url = gateway_url.rstrip("/")
-        # Shared across asyncio.to_thread workers. urllib3's connection pool
-        # is thread-safe for stateless GETs; the cookie jar is not, but IPFS
-        # gateway reads never depend on cookies.
-        self.session = requests.Session()
+        # Per-instance client so each catalog owns its pool lifecycle
+        # (closed via weakref.finalize when the catalog is collected).
+        # httpx.Client is thread-safe across asyncio.to_thread workers.
+        # Credentials are baked into the client so every gateway read carries
+        # them, mirroring the KuboCAS data path.
+        self.client = httpx.Client(
+            timeout=30,
+            follow_redirects=True,
+            headers=headers,
+            auth=auth,
+        )
 
-    def read_text(self, source: str, *args, **kwargs) -> str:
+    def read_text(self, source: str | PathLike[str], *args, **kwargs) -> str:
         """
         Read text content from a source URI.
 
         If the source starts with 'ipfs://', resolves it via the HTTP gateway.
-        Otherwise, delegates to the default StacIO implementation.
+        HTTP(S) sources are fetched directly by the owned HTTP client.
 
         Args:
             source: URI to read from (e.g., 'ipfs://bafkrei...' or 'https://...')
@@ -149,19 +200,28 @@ class IPFSStacIO(pystac.StacIO):
             str: The text content
 
         Raises:
-            requests.HTTPError: If the HTTP request fails
+            httpx.HTTPError: If the HTTP request fails
         """
-        if source.startswith("ipfs://"):
-            cid = source.replace("ipfs://", "")
+        source_text = fspath(source)
+        if source_text.startswith("ipfs://"):
+            cid = source_text.replace("ipfs://", "")
             url = f"{self.gateway_url}/ipfs/{cid}"
-            response = self.session.get(url, timeout=30)
+            response = self.client.get(url, timeout=30)
             response.raise_for_status()
             return response.text
 
-        # Fall back to default behavior for HTTP/HTTPS URLs
-        return super().read_text(source, *args, **kwargs)
+        scheme = urlsplit(source_text).scheme.lower()
+        if scheme in {"http", "https"}:
+            response = self.client.get(source_text)
+            response.raise_for_status()
+            return response.text
 
-    def write_text(self, dest: str, txt: str, *args, **kwargs) -> None:
+        unsupported_scheme = scheme or "<none>"
+        raise ValueError(
+            f"Unsupported STAC source scheme '{unsupported_scheme}': {source_text}"
+        )
+
+    def write_text(self, dest: str | PathLike[str], txt: str, *args, **kwargs) -> None:
         """
         Write text content is not supported for IPFS.
 
@@ -171,14 +231,17 @@ class IPFSStacIO(pystac.StacIO):
         raise NotImplementedError("Writing to IPFS is not supported via StacIO")
 
     def close(self) -> None:
-        """Close the pooled HTTP session owned by this I/O handler."""
-        self.session.close()
+        """Close the pooled HTTP client owned by this I/O handler."""
+        self.client.close()
 
 
 def load_stac_catalog(
     gateway_url: str,
     root_cid: Optional[str] = None,
     catalog_url: str = STAC_CATALOG_URL,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    auth: Optional[Tuple[str, str]] = None,
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -187,20 +250,25 @@ def load_stac_catalog(
         gateway_url: Base URL of the IPFS HTTP gateway
         root_cid: Optional IPFS CID of the root catalog. If None, fetches via get_root_catalog_cid()
         catalog_url: Root-CID pointer endpoint used when ``root_cid`` is omitted.
+        headers: Optional default headers for every gateway/pointer request.
+            Pass the same credentials used for the KuboCAS data path so catalog
+            fallback works against authenticated gateways.
+        auth: Optional ``(username, password)`` basic-auth pair for every
+            gateway/pointer request.
 
     Returns:
         pystac.Catalog: The loaded STAC catalog with all links and references
 
     Raises:
-        requests.HTTPError: If fetching from IPFS fails
+        httpx.HTTPError: If fetching from IPFS fails
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:
-        root_cid = get_root_catalog_cid(catalog_url)
+        root_cid = get_root_catalog_cid(catalog_url, headers=headers, auth=auth)
 
     # Bind the I/O handler to this catalog. Avoid pystac's process-global
     # default, because concurrent clients may use different gateways.
-    stac_io = IPFSStacIO(gateway_url)
+    stac_io = IPFSStacIO(gateway_url, headers=headers, auth=auth)
 
     # Load the root catalog
     catalog_uri = f"ipfs://{root_cid}"
@@ -223,9 +291,11 @@ def resolve_dataset_cid_from_stac(
     dataset: str,
     variant: Optional[str] = None,
     organization: Optional[str] = None,
-) -> str:
+) -> ResolvedDataset:
     """
     Resolve a dataset to its IPFS CID by querying the STAC catalog.
+
+    Changed in 0.6: returns ResolvedDataset.
 
     This function navigates the STAC catalog structure to find the specific dataset variant
     and extracts the Zarr data CID from the STAC Item's assets.
@@ -243,7 +313,7 @@ def resolve_dataset_cid_from_stac(
             catalog metadata.
 
     Returns:
-        str: The IPFS CID of the Zarr dataset (without 'ipfs://' prefix)
+        ResolvedDataset: The IPFS CID and selected variant
 
     Raises:
         ValueError: If collection, dataset, or variant is not found in the catalog
@@ -318,6 +388,7 @@ def resolve_dataset_cid_from_stac(
 
     candidates = []
     selected_item = None
+    selected_variant = None
     for item in items:
         # Item IDs follow pattern: "{collection_id}-{dataset}" or "-{variant}"
         properties = item.properties or {}
@@ -355,6 +426,7 @@ def resolve_dataset_cid_from_stac(
 
         if variant is not None and item_variant == variant:
             selected_item = item
+            selected_variant = variant
             break
     if variant is not None:
         if not selected_item:
@@ -368,21 +440,23 @@ def resolve_dataset_cid_from_stac(
             )
         # If multiple variants exist and none specified, pick a sensible default
         preferred_order = ["default", "final", "finalized", "latest"]
-        selected_item = candidates[0][1]
+        selected_variant, selected_item = candidates[0]
         for preferred in preferred_order:
             for cand_variant, cand_item in candidates:
                 if cand_variant == preferred:
                     selected_item = cand_item
+                    selected_variant = cand_variant
                     break
             else:
                 continue
             break
 
+    assert selected_variant is not None
     if "data" in selected_item.assets:
         href = selected_item.assets["data"].href
         if href.startswith("ipfs://"):
-            return href.replace("ipfs://", "")
-        return href
+            href = href.replace("ipfs://", "")
+        return ResolvedDataset(href, selected_variant)
 
     raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")
 
@@ -448,7 +522,9 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
         if is_org:
             org_id = child_id
             org_title = link.title or org_id
-            org_catalog = link.resolve_stac_object(root=catalog).target
+            org_catalog = cast(
+                pystac.Catalog, link.resolve_stac_object(root=catalog).target
+            )
 
             # Map collection -> category (historical/forecast/etc.)
             collection_categories: Dict[str, str] = {}
@@ -493,7 +569,10 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
 
                 # Resolve items to extract per-variant extents
                 try:
-                    col_catalog = col_link.resolve_stac_object(root=org_catalog).target
+                    col_catalog = cast(
+                        pystac.Catalog,
+                        col_link.resolve_stac_object(root=org_catalog).target,
+                    )
                     if col_catalog is not None:
                         items = list(col_catalog.get_items())
                         known_datasets = set(types)

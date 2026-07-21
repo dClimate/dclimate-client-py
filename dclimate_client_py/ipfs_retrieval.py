@@ -12,8 +12,6 @@ from typing import Any
 
 import aiohttp
 import httpx
-import requests
-import urllib3
 import xarray as xr
 from multiformats import CID
 from opentelemetry import metrics, trace
@@ -152,29 +150,16 @@ def _is_connection_error(exc: Exception) -> bool:
         TimeoutError,
         socket.gaierror,
         socket.herror,
-        requests.exceptions.ConnectionError,
-        requests.exceptions.Timeout,
-        urllib3.exceptions.NewConnectionError,
-        urllib3.exceptions.ConnectTimeoutError,
-        urllib3.exceptions.ReadTimeoutError,
-        urllib3.exceptions.ProtocolError,
         httpx.TransportError,
         aiohttp.ClientConnectionError,
         aiohttp.ServerTimeoutError,
     )
+    # Note: exhausted HTTP-status retries (httpx.HTTPStatusError) are
+    # deliberately NOT connection errors — they take the HAMT fallback.
     current: BaseException | None = exc
     seen: set[int] = set()
     while current is not None and id(current) not in seen:
         seen.add(id(current))
-        if isinstance(current, urllib3.exceptions.MaxRetryError):
-            # MaxRetryError also wraps exhausted HTTP-status retries. Those
-            # should take the normal HAMT fallback rather than masquerading
-            # as transport failures.
-            if isinstance(current.reason, urllib3.exceptions.ResponseError):
-                return False
-            if isinstance(current.reason, BaseException):
-                current = current.reason
-                continue
         if isinstance(current, connection_error_types):
             return True
         current = current.__cause__ or current.__context__

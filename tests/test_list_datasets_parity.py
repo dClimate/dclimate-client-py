@@ -30,8 +30,8 @@ import json
 import os
 from typing import Any, Dict
 
+import httpx
 import pytest
-import requests
 
 from dclimate_client_py.stac_catalog import (
     load_stac_catalog,
@@ -58,11 +58,16 @@ PUBLIC_IPFS_GATEWAY = IPFS_GATEWAY_URL
 def _probe(url: str, *, post: bool = False, timeout: float = 10.0) -> bool:
     try:
         if post:
-            resp = requests.post(url, json={"limit": 1}, timeout=timeout)
+            resp = httpx.post(
+                url,
+                json={"limit": 1},
+                timeout=timeout,
+                follow_redirects=True,
+            )
         else:
-            resp = requests.get(url, timeout=timeout)
-        return resp.ok
-    except (requests.ConnectionError, requests.Timeout, requests.RequestException):
+            resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        return resp.is_success
+    except httpx.HTTPError:
         return False
 
 

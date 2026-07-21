@@ -85,7 +85,7 @@ datasets = list_available_datasets(catalog)
 # }
 
 # Resolve a specific dataset to its CID
-cid = resolve_dataset_cid_from_stac(
+resolved = resolve_dataset_cid_from_stac(
     catalog=catalog,
     collection="ecmwf_era5",
     dataset="temperature_2m",
@@ -93,7 +93,7 @@ cid = resolve_dataset_cid_from_stac(
     organization="ecmwf",
 )
 
-print(f"Dataset CID: {cid}")
+print(f"Dataset CID: {resolved.cid} (variant: {resolved.variant})")
 ```
 
 ## STAC Catalog Structure
@@ -317,7 +317,7 @@ def resolve_dataset_cid_from_stac(
     collection: str,
     dataset: str,
     variant: Optional[str] = None
-) -> str
+) -> ResolvedDataset
 ```
 
 **Parameters:**
@@ -327,7 +327,7 @@ def resolve_dataset_cid_from_stac(
 - `variant`: Optional variant name
 
 **Returns:**
-- `str`: IPFS CID (without "ipfs://" prefix)
+- `ResolvedDataset`: IPFS CID (without "ipfs://" prefix) and selected variant
 
 **Raises:**
 - `ValueError`: If collection, dataset, or variant is not found
@@ -340,14 +340,14 @@ from dclimate_client_py import load_stac_catalog, resolve_dataset_cid_from_stac
 catalog = load_stac_catalog("https://ipfs-gateway.dclimate.net")
 
 # Resolve dataset to CID
-cid = resolve_dataset_cid_from_stac(
+resolved = resolve_dataset_cid_from_stac(
     catalog=catalog,
     collection="ifs",
     dataset="temperature",
     variant="single"
 )
 
-print(f"Dataset CID: {cid}")
+print(f"Dataset CID: {resolved.cid} (variant: {resolved.variant})")
 ```
 
 ### `get_root_catalog_cid()`
@@ -362,7 +362,7 @@ def get_root_catalog_cid() -> str
 - `str`: The IPFS CID of the latest root STAC catalog
 
 **Raises:**
-- `requests.HTTPError`: If the API request fails
+- `httpx.HTTPError`: If the API request fails
 - `KeyError`: If response doesn't contain expected 'cid' field
 
 **Example:**

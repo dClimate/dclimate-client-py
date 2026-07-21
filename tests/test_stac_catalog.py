@@ -1,10 +1,11 @@
 """
 Comprehensive tests for STAC catalog integration module.
 
-Tests all functions and classes in stac_catalog.py using real data from the dClimate IPFS gateway.
-No mocking is used - all tests interact with actual STAC catalog data.
+Tests all functions and classes in stac_catalog.py. Integration cases use the
+real dClimate IPFS gateway; isolated protocol cases use httpx MockTransport.
 """
 
+import httpx
 import pytest
 import pystac
 from dclimate_client_py import stac_catalog
@@ -124,6 +125,33 @@ class TestIPFSStacIO:
         assert isinstance(content2, str)
         assert content1 == content2
 
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_read_text_fetches_http_urls(self, scheme):
+        requested_url = f"{scheme}://catalog.example/root.json"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert str(request.url) == requested_url
+            return httpx.Response(200, text='{"type": "Catalog"}', request=request)
+
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        stac_io.client.close()
+        stac_io.client = httpx.Client(transport=httpx.MockTransport(handler))
+        try:
+            assert stac_io.read_text(requested_url) == '{"type": "Catalog"}'
+        finally:
+            stac_io.close()
+
+    @pytest.mark.parametrize(
+        "source", ["file:///tmp/catalog.json", "s3://bucket/catalog.json"]
+    )
+    def test_read_text_rejects_unsupported_schemes(self, source):
+        stac_io = stac_catalog.IPFSStacIO("https://gateway.example")
+        try:
+            with pytest.raises(ValueError, match=source.split(":", 1)[0]):
+                stac_io.read_text(source)
+        finally:
+            stac_io.close()
+
     def test_write_text_raises_not_implemented(self):
         """Test that write_text raises NotImplementedError."""
         gateway_url = "https://ipfs-gateway.dclimate.net"
@@ -228,16 +256,16 @@ class TestResolveDatasetCidFromStac:
             pytest.skip("No datasets available in catalog")
 
         # Try to resolve the CID
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog, collection=collection_id, dataset=dataset_type
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
         # Should not have ipfs:// prefix
-        assert not cid.startswith("ipfs://")
+        assert not resolved.cid.startswith("ipfs://")
         # Should be a valid CID format
-        assert cid.startswith(("Qm", "bafy", "bafk", "bafz"))
+        assert resolved.cid.startswith(("Qm", "bafy", "bafk", "bafz"))
 
     def test_resolve_dataset_cid_with_variant(self, loaded_catalog):
         """Test resolving a dataset CID with a specific variant."""
@@ -278,7 +306,7 @@ class TestResolveDatasetCidFromStac:
         item_dataset = parts[1]
         item_variant = parts[2]
 
-        cid = stac_catalog.resolve_dataset_cid_from_stac(
+        resolved = stac_catalog.resolve_dataset_cid_from_stac(
             loaded_catalog,
             collection=item_collection,
             dataset=item_dataset,
@@ -286,9 +314,9 @@ class TestResolveDatasetCidFromStac:
             organization=organization_id,
         )
 
-        assert isinstance(cid, str)
-        assert len(cid) > 0
-        assert not cid.startswith("ipfs://")
+        assert isinstance(resolved.cid, str)
+        assert len(resolved.cid) > 0
+        assert not resolved.cid.startswith("ipfs://")
 
     def test_resolve_dataset_cid_invalid_collection(self, loaded_catalog):
         """Test that invalid collection raises ValueError."""
@@ -470,11 +498,11 @@ class TestIntegrationEndToEnd:
                 break
 
         if collection_id and dataset_type:
-            cid = stac_catalog.resolve_dataset_cid_from_stac(
+            resolved = stac_catalog.resolve_dataset_cid_from_stac(
                 catalog, collection=collection_id, dataset=dataset_type
             )
-            assert isinstance(cid, str)
-            assert len(cid) > 0
+            assert isinstance(resolved.cid, str)
+            assert len(resolved.cid) > 0
 
     def test_multiple_catalog_loads_work(self):
         """Test that multiple catalog loads don't interfere with each other."""

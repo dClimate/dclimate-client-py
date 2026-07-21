@@ -12,7 +12,7 @@ from collections.abc import Mapping
 if typing.TYPE_CHECKING:
     import pystac
 
-import requests
+import httpx
 import xarray as xr
 from py_hamt import KuboCAS
 
@@ -24,6 +24,7 @@ from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
+    ResolvedDataset,
     resolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
 )
@@ -34,6 +35,8 @@ from .siren.types import (
     SirenOptions,
     SirenRegion,
 )
+
+DEFAULT_PUBLIC_GATEWAY = "https://ipfs-gateway.dclimate.net"
 
 
 class dClimateClient:
@@ -47,10 +50,26 @@ class dClimateClient:
     ----------
     gateway_base_url : str, optional
         IPFS HTTP Gateway base URL (e.g., "https://ipfs.io" or "http://localhost:8080").
-        If None, uses KuboCAS defaults or environment variables.
+        If None, KuboCAS uses its own defaults while STAC-catalog fallback reads
+        use ``DEFAULT_PUBLIC_GATEWAY``.
     rpc_base_url : str, optional
         IPFS RPC API base URL (e.g., "http://localhost:5001").
         If None, uses KuboCAS defaults or environment variables.
+    concurrency : int, optional
+        Maximum number of concurrent Kubo gateway and RPC requests.
+    headers : dict[str, str], optional
+        Default headers for the internally-created HTTP client.
+    auth : tuple[str, str], optional
+        Authentication tuple (username, password) for the internally-created client.
+    max_retries : int, optional
+        Maximum number of retries for retryable gateway requests.
+    initial_delay : float, optional
+        Initial retry delay in seconds.
+    backoff_factor : float, optional
+        Multiplier used for exponential retry backoff.
+    client_factory : Callable[[], httpx.AsyncClient], optional
+        Create a separate, fully configured HTTP client for each event loop.
+        Cannot be combined with ``headers`` or ``auth``.
 
     Examples
     --------
@@ -83,14 +102,35 @@ class dClimateClient:
 
     def __init__(
         self,
-        gateway_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
-        rpc_base_url: typing.Optional[str] = "https://ipfs-gateway.dclimate.net",
+        gateway_base_url: typing.Optional[str] = DEFAULT_PUBLIC_GATEWAY,
+        rpc_base_url: typing.Optional[str] = DEFAULT_PUBLIC_GATEWAY,
         stac_server_url: typing.Optional[str] = "https://api.stac.dclimate.net",
         siren: typing.Optional[SirenOptions] = None,
-    ):
+        *,
+        concurrency: typing.Optional[int] = None,
+        headers: typing.Optional[dict[str, str]] = None,
+        auth: typing.Optional[tuple[str, str]] = None,
+        max_retries: typing.Optional[int] = None,
+        initial_delay: typing.Optional[float] = None,
+        backoff_factor: typing.Optional[float] = None,
+        client_factory: typing.Optional[typing.Callable[[], httpx.AsyncClient]] = None,
+    ) -> None:
+        if client_factory is not None and (headers is not None or auth is not None):
+            raise ValueError("client_factory cannot be combined with headers or auth")
+
         self._gateway_base_url = gateway_base_url
+        self._catalog_gateway_base_url = (
+            gateway_base_url if gateway_base_url is not None else DEFAULT_PUBLIC_GATEWAY
+        )
         self._rpc_base_url = rpc_base_url
         self._stac_server_url = stac_server_url
+        self._concurrency = concurrency
+        self._headers = headers
+        self._auth = auth
+        self._max_retries = max_retries
+        self._initial_delay = initial_delay
+        self._backoff_factor = backoff_factor
+        self._client_factory = client_factory
         self._stac_catalog: typing.Optional["pystac.Catalog"] = None
         self._stac_catalog_lock = asyncio.Lock()
         self._kubo_cas: typing.Optional[KuboCAS] = None
@@ -104,10 +144,27 @@ class dClimateClient:
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
         # Create KuboCAS with configured endpoints
-        self._kubo_cas = KuboCAS(
-            gateway_base_url=self._gateway_base_url,
-            rpc_base_url=self._rpc_base_url,
+        kubo_kwargs: dict[str, typing.Any] = {
+            "gateway_base_url": self._gateway_base_url,
+            "rpc_base_url": self._rpc_base_url,
+        }
+        optional_kubo_kwargs = {
+            "concurrency": self._concurrency,
+            "headers": self._headers,
+            "auth": self._auth,
+            "max_retries": self._max_retries,
+            "initial_delay": self._initial_delay,
+            "backoff_factor": self._backoff_factor,
+            "client_factory": self._client_factory,
+        }
+        kubo_kwargs.update(
+            {
+                key: value
+                for key, value in optional_kubo_kwargs.items()
+                if value is not None
+            }
         )
+        self._kubo_cas = KuboCAS(**kubo_kwargs)
         # Enter the KuboCAS context manager
         await self._kubo_cas.__aenter__()
         return self
@@ -233,7 +290,7 @@ class dClimateClient:
             If dataset cannot be found in STAC catalog
         InvalidSelectionError
             If collection parameter is not provided (when not using direct CID)
-        requests.RequestException
+        httpx.HTTPError
             If connection to IPFS gateway fails
 
         Examples
@@ -259,21 +316,22 @@ class dClimateClient:
                 "Use 'async with dClimateClient() as client:'"
             )
 
-        resolved_collection = collection
-        if (
-            organization
-            and collection
-            and not collection.startswith(f"{organization}_")
-        ):
-            resolved_collection = f"{organization}_{collection}"
-
         # Case 1: Direct CID provided - bypass catalog resolution
+        metadata: DatasetMetadata
         if cid:
-            slug_collection = resolved_collection or collection or "unknown"
+            direct_collection = collection
+            if (
+                organization
+                and direct_collection
+                and not direct_collection.startswith(f"{organization}_")
+            ):
+                direct_collection = f"{organization}_{direct_collection}"
+            slug_collection = direct_collection or "unknown"
+            direct_variant = variant or "unknown"
             dataset_slug = (
-                f"{organization}/{slug_collection}/{dataset}/{variant or 'default'}"
+                f"{organization}/{slug_collection}/{dataset}/{direct_variant}"
                 if organization
-                else f"{slug_collection}/{dataset}/{variant or 'default'}"
+                else f"{slug_collection}/{dataset}/{direct_variant}"
             )
             ds = await _load_dataset_from_ipfs_cid(
                 ipfs_cid=cid,
@@ -283,10 +341,10 @@ class dClimateClient:
             )
 
             # Build metadata for direct CID case
-            metadata: DatasetMetadata = {
-                "collection": resolved_collection or "unknown",
+            metadata = {
+                "collection": direct_collection or "unknown",
                 "dataset": dataset,
-                "variant": variant or "unknown",
+                "variant": direct_variant,
                 "slug": dataset_slug,
                 "cid": cid,
                 "url": None,
@@ -294,8 +352,8 @@ class dClimateClient:
                 "source": "direct_cid",
                 "organization": organization
                 or (
-                    resolved_collection.split("_")[0]
-                    if resolved_collection and "_" in resolved_collection
+                    direct_collection.split("_")[0]
+                    if direct_collection and "_" in direct_collection
                     else None
                 ),
             }
@@ -312,24 +370,28 @@ class dClimateClient:
                 "collection parameter is required. Use client.list_datasets() to see available collections."
             )
 
-        final_cid = None
+        resolved_collection = collection
+        if organization and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
+
+        resolved: typing.Optional[ResolvedDataset] = None
 
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                final_cid = await asyncio.to_thread(
+                resolved = await asyncio.to_thread(
                     resolve_cid_from_stac_server,
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
                     server_url=self._stac_server_url,
                 )
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 # Fall back when server lookup fails or returns no usable match.
                 pass
 
         # Fallback: Resolve via STAC catalog from IPFS
-        if final_cid is None:
+        if resolved is None:
             from .stac_catalog import (
                 list_available_datasets,
                 load_stac_catalog,
@@ -342,7 +404,9 @@ class dClimateClient:
                     if self._stac_catalog is None:
                         self._stac_catalog = await asyncio.to_thread(
                             load_stac_catalog,
-                            gateway_url=self._gateway_base_url,
+                            gateway_url=self._catalog_gateway_base_url,
+                            headers=self._headers,
+                            auth=self._auth,
                         )
 
             if not organization and resolved_collection:
@@ -358,7 +422,7 @@ class dClimateClient:
                     if len(prefixed_matches) == 1:
                         resolved_collection = prefixed_matches[0]
 
-            final_cid = await asyncio.to_thread(
+            resolved = await asyncio.to_thread(
                 resolve_dataset_cid_from_stac,
                 catalog=self._stac_catalog,
                 collection=resolved_collection,
@@ -367,24 +431,26 @@ class dClimateClient:
                 organization=organization,
             )
 
+        assert resolved is not None
+
         ds = await _load_dataset_from_ipfs_cid(
-            ipfs_cid=final_cid,
+            ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
             zarr_group=zarr_group,
             shard_read_mode=shard_read_mode,
         )
 
         # Build metadata for STAC case
-        metadata: DatasetMetadata = {
+        metadata = {
             "collection": resolved_collection,
             "dataset": dataset,
-            "variant": variant or "default",
+            "variant": resolved.variant,
             "slug": (
-                f"{organization}/{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+                f"{organization}/{resolved_collection or collection}/{dataset}/{resolved.variant}"
                 if organization
-                else f"{resolved_collection or collection}/{dataset}/{variant or 'default'}"
+                else f"{resolved_collection or collection}/{dataset}/{resolved.variant}"
             ),
-            "cid": final_cid,
+            "cid": resolved.cid,
             "url": None,
             "timestamp": None,
             "source": "stac",
@@ -490,14 +556,18 @@ class dClimateClient:
         if self._stac_server_url:
             try:
                 return list_available_datasets_from_stac_server(self._stac_server_url)
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 pass
 
         # Fallback: walk the IPFS-hosted catalog.
         from .stac_catalog import load_stac_catalog, list_available_datasets
 
         if self._stac_catalog is None:
-            self._stac_catalog = load_stac_catalog(gateway_url=self._gateway_base_url)
+            self._stac_catalog = load_stac_catalog(
+                gateway_url=self._catalog_gateway_base_url,
+                headers=self._headers,
+                auth=self._auth,
+            )
 
         return list_available_datasets(self._stac_catalog)
 
@@ -513,7 +583,7 @@ class dClimateClient:
                 return await asyncio.to_thread(
                     list_available_datasets_from_stac_server, self._stac_server_url
                 )
-            except (requests.RequestException, ValueError):
+            except (httpx.HTTPError, ValueError):
                 pass
 
         from .stac_catalog import load_stac_catalog, list_available_datasets
@@ -522,7 +592,10 @@ class dClimateClient:
             async with self._stac_catalog_lock:
                 if self._stac_catalog is None:
                     self._stac_catalog = await asyncio.to_thread(
-                        load_stac_catalog, gateway_url=self._gateway_base_url
+                        load_stac_catalog,
+                        gateway_url=self._catalog_gateway_base_url,
+                        headers=self._headers,
+                        auth=self._auth,
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
