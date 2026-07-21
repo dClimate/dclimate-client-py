@@ -378,7 +378,7 @@ def test_stac_server_raises_when_page_limit_would_truncate_results(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(stac_server.requests, "post", post)
+    _install_post(monkeypatch, post)
 
     with pytest.raises(ValueError, match="page limit of 2"):
         list(stac_server._search_pages("https://example.test", {"limit": 100}, 10))
@@ -549,7 +549,7 @@ def test_catalog_requested_dataset_is_a_disambiguation_candidate():
         organization="org",
     )
 
-    assert cid == "bafy-catalog-precip-daily-final"
+    assert cid.cid == "bafy-catalog-precip-daily-final"
 
 
 def test_load_stac_catalog_binds_io_without_mutating_pystac_default(monkeypatch):
@@ -632,7 +632,10 @@ def test_load_stac_catalog_uses_configured_pointer_endpoint(monkeypatch):
     )
 
     pointer_client.get.assert_called_once_with(
-        "https://control.test/catalog-root", timeout=30, headers=None, auth=None
+        "https://control.test/catalog-root",
+        timeout=30,
+        headers=None,
+        auth=httpx.USE_CLIENT_DEFAULT,
     )
     assert observed["href"] == "ipfs://bafy-configured-root"
 

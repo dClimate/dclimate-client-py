@@ -65,7 +65,12 @@ def get_root_catalog_cid(
     """
     # The pooled client is process-wide and gateway-agnostic, so credentials are
     # applied per-request rather than baked into the shared client.
-    response = _client().get(catalog_url, timeout=30, headers=headers, auth=auth)
+    response = _client().get(
+        catalog_url,
+        timeout=30,
+        headers=headers,
+        auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
+    )
     response.raise_for_status()
     data = response.json()
     return data["cid"]
