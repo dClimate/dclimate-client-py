@@ -563,9 +563,60 @@ def test_load_stac_catalog_uses_configured_pointer_endpoint(monkeypatch):
     )
 
     pointer_client.get.assert_called_once_with(
-        "https://control.test/catalog-root", timeout=30
+        "https://control.test/catalog-root", timeout=30, headers=None, auth=None
     )
     assert observed["href"] == "ipfs://bafy-configured-root"
+
+
+def test_load_stac_catalog_threads_gateway_credentials(monkeypatch):
+    """Auth/headers must reach both the pointer fetch and gateway I/O.
+
+    Regression guard: authenticated gateways previously 401'd on catalog
+    fallback because credentials were dropped between the KuboCAS data path
+    and the STAC catalog reads.
+    """
+    headers = {"Authorization": "Bearer token"}
+    auth = ("user", "secret")
+
+    response = Mock()
+    response.json.return_value = {"cid": "bafy-auth-root"}
+    pointer_client = Mock()
+    pointer_client.get.return_value = response
+    monkeypatch.setattr(stac_catalog, "_client", lambda: pointer_client)
+
+    captured: dict[str, Any] = {}
+
+    def recording_init(self, gateway_url, *, headers=None, auth=None):
+        captured["gateway_url"] = gateway_url
+        captured["headers"] = headers
+        captured["auth"] = auth
+        self.gateway_url = gateway_url.rstrip("/")
+        self.client = Mock()
+
+    monkeypatch.setattr(stac_catalog.IPFSStacIO, "__init__", recording_init)
+
+    def from_file(cls, href, stac_io=None):
+        return pystac.Catalog(id="root", description="Root")
+
+    monkeypatch.setattr(pystac.Catalog, "from_file", classmethod(from_file))
+
+    stac_catalog.load_stac_catalog(
+        "https://gateway.test",
+        catalog_url="https://control.test/catalog-root",
+        headers=headers,
+        auth=auth,
+    )
+
+    # Pointer endpoint (same host as the gateway) carries the credentials.
+    pointer_client.get.assert_called_once_with(
+        "https://control.test/catalog-root",
+        timeout=30,
+        headers=headers,
+        auth=auth,
+    )
+    # Gateway I/O handler is constructed with the credentials too.
+    assert captured["headers"] == headers
+    assert captured["auth"] == auth
 
 
 def test_catalog_lister_uses_dataset_metadata_for_partial_item_properties():

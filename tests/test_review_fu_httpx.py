@@ -83,7 +83,7 @@ async def test_load_dataset_falls_back_when_stac_transport_is_unreachable(
     monkeypatch.setattr(
         stac_catalog,
         "get_root_catalog_cid",
-        lambda catalog_url=stac_catalog.STAC_CATALOG_URL: "bafy-review-root",
+        lambda catalog_url=stac_catalog.STAC_CATALOG_URL, **_: "bafy-review-root",
     )
 
     def fake_from_file(

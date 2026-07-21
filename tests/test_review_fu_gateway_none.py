@@ -23,7 +23,7 @@ async def test_alist_datasets_uses_public_gateway_when_gateway_is_none(
     monkeypatch.setattr(
         stac_catalog,
         "get_root_catalog_cid",
-        lambda catalog_url=stac_catalog.STAC_CATALOG_URL: "bafy-review-root",
+        lambda catalog_url=stac_catalog.STAC_CATALOG_URL, **_: "bafy-review-root",
     )
 
     def fake_from_file(
@@ -45,9 +45,10 @@ async def test_alist_datasets_uses_public_gateway_when_gateway_is_none(
     def recording_init(
         self: stac_catalog.IPFSStacIO,
         gateway_url: str,
+        **kwargs: Any,
     ) -> None:
         constructed_gateways.append(gateway_url)
-        original_init(self, gateway_url)
+        original_init(self, gateway_url, **kwargs)
 
     monkeypatch.setattr(stac_catalog.IPFSStacIO, "__init__", recording_init)
 

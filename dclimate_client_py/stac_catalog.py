@@ -38,7 +38,12 @@ def _client() -> httpx.Client:
     return _HTTP_CLIENT
 
 
-def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
+def get_root_catalog_cid(
+    catalog_url: str = STAC_CATALOG_URL,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    auth: Optional[Tuple[str, str]] = None,
+) -> str:
     """
     Get the root STAC catalog CID.
 
@@ -46,6 +51,10 @@ def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
 
     Args:
         catalog_url: URL of the dClimate STAC root-CID pointer endpoint.
+        headers: Optional default headers for the request. The pointer endpoint
+            lives on the IPFS gateway host, so authenticated gateways need the
+            same credentials here as for ``/ipfs`` reads.
+        auth: Optional ``(username, password)`` basic-auth pair for the request.
 
     Returns:
         str: The IPFS CID of the root STAC catalog
@@ -54,7 +63,9 @@ def get_root_catalog_cid(catalog_url: str = STAC_CATALOG_URL) -> str:
         httpx.HTTPError: If the API request fails
         KeyError: If the response doesn't contain the expected 'cid' field
     """
-    response = _client().get(catalog_url, timeout=30)
+    # The pooled client is process-wide and gateway-agnostic, so credentials are
+    # applied per-request rather than baked into the shared client.
+    response = _client().get(catalog_url, timeout=30, headers=headers, auth=auth)
     response.raise_for_status()
     data = response.json()
     return data["cid"]
@@ -144,18 +155,36 @@ class IPFSStacIO(pystac.StacIO):
     that are stored on IPFS and referenced using ipfs:// protocol URIs.
     """
 
-    def __init__(self, gateway_url: str):
+    def __init__(
+        self,
+        gateway_url: str,
+        *,
+        headers: Optional[Dict[str, str]] = None,
+        auth: Optional[Tuple[str, str]] = None,
+    ):
         """
         Initialize the IPFS STAC I/O handler.
 
         Args:
             gateway_url: Base URL of the IPFS HTTP gateway (e.g., 'https://ipfs-gateway.dclimate.net')
+            headers: Optional default headers applied to every gateway request.
+                Required for authenticated gateways so catalog fallback does not
+                fail with 401.
+            auth: Optional ``(username, password)`` basic-auth pair applied to
+                every gateway request.
         """
         self.gateway_url = gateway_url.rstrip("/")
         # Per-instance client so each catalog owns its pool lifecycle
         # (closed via weakref.finalize when the catalog is collected).
         # httpx.Client is thread-safe across asyncio.to_thread workers.
-        self.client = httpx.Client(timeout=30, follow_redirects=True)
+        # Credentials are baked into the client so every gateway read carries
+        # them, mirroring the KuboCAS data path.
+        self.client = httpx.Client(
+            timeout=30,
+            follow_redirects=True,
+            headers=headers,
+            auth=auth,
+        )
 
     def read_text(self, source: str | PathLike[str], *args, **kwargs) -> str:
         """
@@ -210,6 +239,9 @@ def load_stac_catalog(
     gateway_url: str,
     root_cid: Optional[str] = None,
     catalog_url: str = STAC_CATALOG_URL,
+    *,
+    headers: Optional[Dict[str, str]] = None,
+    auth: Optional[Tuple[str, str]] = None,
 ) -> pystac.Catalog:
     """
     Load the dClimate STAC catalog from IPFS.
@@ -218,6 +250,11 @@ def load_stac_catalog(
         gateway_url: Base URL of the IPFS HTTP gateway
         root_cid: Optional IPFS CID of the root catalog. If None, fetches via get_root_catalog_cid()
         catalog_url: Root-CID pointer endpoint used when ``root_cid`` is omitted.
+        headers: Optional default headers for every gateway/pointer request.
+            Pass the same credentials used for the KuboCAS data path so catalog
+            fallback works against authenticated gateways.
+        auth: Optional ``(username, password)`` basic-auth pair for every
+            gateway/pointer request.
 
     Returns:
         pystac.Catalog: The loaded STAC catalog with all links and references
@@ -227,11 +264,11 @@ def load_stac_catalog(
         pystac.STACError: If the catalog structure is invalid
     """
     if root_cid is None:
-        root_cid = get_root_catalog_cid(catalog_url)
+        root_cid = get_root_catalog_cid(catalog_url, headers=headers, auth=auth)
 
     # Bind the I/O handler to this catalog. Avoid pystac's process-global
     # default, because concurrent clients may use different gateways.
-    stac_io = IPFSStacIO(gateway_url)
+    stac_io = IPFSStacIO(gateway_url, headers=headers, auth=auth)
 
     # Load the root catalog
     catalog_uri = f"ipfs://{root_cid}"

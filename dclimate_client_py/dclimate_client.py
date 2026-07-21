@@ -405,6 +405,8 @@ class dClimateClient:
                         self._stac_catalog = await asyncio.to_thread(
                             load_stac_catalog,
                             gateway_url=self._catalog_gateway_base_url,
+                            headers=self._headers,
+                            auth=self._auth,
                         )
 
             if not organization and resolved_collection:
@@ -562,7 +564,9 @@ class dClimateClient:
 
         if self._stac_catalog is None:
             self._stac_catalog = load_stac_catalog(
-                gateway_url=self._catalog_gateway_base_url
+                gateway_url=self._catalog_gateway_base_url,
+                headers=self._headers,
+                auth=self._auth,
             )
 
         return list_available_datasets(self._stac_catalog)
@@ -590,6 +594,8 @@ class dClimateClient:
                     self._stac_catalog = await asyncio.to_thread(
                         load_stac_catalog,
                         gateway_url=self._catalog_gateway_base_url,
+                        headers=self._headers,
+                        auth=self._auth,
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
