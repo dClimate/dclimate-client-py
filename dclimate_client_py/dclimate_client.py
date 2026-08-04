@@ -230,7 +230,7 @@ class dClimateClient:
         """Return the pooled STAC transport owned by this client context."""
         client = self._stac_http_client
         if client is None or client.is_closed:
-            client = httpx.AsyncClient(timeout=30, follow_redirects=True)
+            client = httpx.AsyncClient(timeout=30, follow_redirects=False)
             self._stac_http_client = client
         return client
 

@@ -41,7 +41,7 @@ def _client() -> httpx.Client:
     if _HTTP_CLIENT is None:
         with _HTTP_CLIENT_LOCK:
             if _HTTP_CLIENT is None:
-                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=False)
     return _HTTP_CLIENT
 
 
@@ -51,7 +51,7 @@ def _async_client() -> httpx.AsyncClient:
     with _ASYNC_HTTP_CLIENT_LOCK:
         client = _ASYNC_HTTP_CLIENTS.get(loop)
         if client is None or client.is_closed:
-            client = httpx.AsyncClient(timeout=30, follow_redirects=True)
+            client = httpx.AsyncClient(timeout=30, follow_redirects=False)
             _ASYNC_HTTP_CLIENTS[loop] = client
     return client
 
@@ -209,9 +209,17 @@ def _search_request_kwargs(
 ) -> Dict[str, Any]:
     """Build transport-independent request arguments for a search page."""
     if method == "POST":
-        request_kwargs: Dict[str, Any] = {"json": body, "timeout": timeout}
+        request_kwargs: Dict[str, Any] = {
+            "json": body,
+            "timeout": timeout,
+            "follow_redirects": False,
+        }
     else:
-        request_kwargs = {"params": body or None, "timeout": timeout}
+        request_kwargs = {
+            "params": body or None,
+            "timeout": timeout,
+            "follow_redirects": False,
+        }
     if headers:
         request_kwargs["headers"] = headers
     return request_kwargs
@@ -270,7 +278,7 @@ def _next_search_request(
 
     method = str(next_link.get("method", "GET")).upper()
     if method not in {"GET", "POST"}:
-        return None
+        raise ValueError(f"STAC pagination link uses an unsupported method: {method!r}")
 
     linked_headers = next_link.get("headers")
     # A server-provided next link may carry continuation credentials. Forward

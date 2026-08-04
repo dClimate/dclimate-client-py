@@ -130,6 +130,65 @@ async def test_async_resolver_rejects_untrusted_pagination_links(
 
 
 @pytest.mark.asyncio
+async def test_async_resolver_does_not_follow_redirects() -> None:
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            302,
+            headers={"Location": "https://attacker.example/collect"},
+            request=request,
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), follow_redirects=True
+    ) as client:
+        with pytest.raises(httpx.HTTPStatusError):
+            await stac_server.aresolve_cid_from_stac_server(
+                collection=COLLECTION,
+                dataset=DATASET,
+                server_url="https://stac.example",
+                client=client,
+            )
+
+    assert requests == ["https://stac.example/search"]
+
+
+@pytest.mark.asyncio
+async def test_async_resolver_rejects_unsupported_pagination_method() -> None:
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "features": [_feature("other_dataset", "default", "bafy-other")],
+                "links": [
+                    {
+                        "rel": "next",
+                        "href": "/search?page=2",
+                        "method": "DELETE",
+                    }
+                ],
+            },
+            request=request,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError, match="unsupported method: 'DELETE'"):
+            await stac_server.aresolve_cid_from_stac_server(
+                collection=COLLECTION,
+                dataset=DATASET,
+                server_url="https://stac.example",
+                client=client,
+            )
+
+    assert requests == ["https://stac.example/search"]
+
+
+@pytest.mark.asyncio
 async def test_async_resolver_drops_linked_headers_on_plaintext_pagination() -> None:
     requests: list[httpx.Request] = []
 
