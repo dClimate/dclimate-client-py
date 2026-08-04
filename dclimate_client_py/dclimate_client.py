@@ -25,7 +25,7 @@ from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
     ResolvedDataset,
-    resolve_cid_from_stac_server,
+    aresolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
 )
 from .siren import SirenClient
@@ -379,8 +379,7 @@ class dClimateClient:
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                resolved = await asyncio.to_thread(
-                    resolve_cid_from_stac_server,
+                resolved = await aresolve_cid_from_stac_server(
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
