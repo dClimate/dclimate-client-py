@@ -18,6 +18,7 @@ import pystac
 from .datasets import SpatialExtent, TemporalExtent
 from .stac_server import (
     ResolvedDataset,
+    ResolvedDatasetDetails,
     _dataset_and_variant_from_item_id,
     _dataset_and_variant_from_known_datasets,
 )
@@ -290,13 +291,13 @@ def load_stac_catalog(
     return catalog
 
 
-def resolve_dataset_cid_from_stac(
+def resolve_dataset_from_stac(
     catalog: pystac.Catalog,
     collection: str,
     dataset: str,
     variant: Optional[str] = None,
     organization: Optional[str] = None,
-) -> ResolvedDataset:
+) -> ResolvedDatasetDetails:
     """
     Resolve a dataset to its IPFS CID by querying the STAC catalog.
 
@@ -318,7 +319,7 @@ def resolve_dataset_cid_from_stac(
             catalog metadata.
 
     Returns:
-        ResolvedDataset: The IPFS CID and selected variant
+        ResolvedDatasetDetails: CID, selected variant, and release-service metadata
 
     Raises:
         ValueError: If collection, dataset, or variant is not found in the catalog
@@ -457,13 +458,43 @@ def resolve_dataset_cid_from_stac(
             break
 
     assert selected_variant is not None
+    properties = selected_item.properties or {}
     if "data" in selected_item.assets:
         href = selected_item.assets["data"].href
         if href.startswith("ipfs://"):
             href = href.replace("ipfs://", "")
-        return ResolvedDataset(href, selected_variant)
+        return ResolvedDatasetDetails(
+            cid=href,
+            variant=selected_variant,
+            versions_api=properties.get("dclimate:versions_api"),
+            provenance_api=properties.get("dclimate:provenance_api"),
+            citation_api=properties.get("dclimate:citation_api"),
+            stream_id=properties.get("dclimate:stream_id"),
+            commit_id=properties.get("dclimate:commit_id"),
+            version_label=properties.get("dclimate:version_label"),
+            is_citable=properties.get("dclimate:is_citable"),
+            retention_class=properties.get("dclimate:retention_class"),
+        )
 
     raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")
+
+
+def resolve_dataset_cid_from_stac(
+    catalog: pystac.Catalog,
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    organization: Optional[str] = None,
+) -> ResolvedDataset:
+    """Resolve a CID while preserving the original two-field public result."""
+    details = resolve_dataset_from_stac(
+        catalog=catalog,
+        collection=collection,
+        dataset=dataset,
+        variant=variant,
+        organization=organization,
+    )
+    return details.as_resolved_dataset()
 
 
 def _extract_item_extents(

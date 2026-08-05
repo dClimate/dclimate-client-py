@@ -143,6 +143,30 @@ for collection_id, info in datasets.items():
 
 ```
 
+### Dataset version history
+
+For datasets that advertise version history in STAC, the client follows the
+item's `dclimate:versions_api` URL. This automatically selects Hydrogen,
+Tritium, or another future version service without a client-side routing map.
+
+```python
+async def list_aigfs_versions():
+    client = dClimateClient()
+    versions = await client.list_dataset_versions(
+        collection="noaa_aigfs",
+        dataset="wind_u_forecast",
+        variant="operational",
+        anchored=True,
+    )
+    for release in versions.versions:
+        print(release.version_label, release.cid)
+```
+
+The lower-level functions in `dclimate_client_py.ceramic_api` retain their
+existing names and explicit `base_url` support. STAC-aware applications should
+prefer `list_dataset_versions()` so they do not need to know which service owns
+a dataset.
+
 ## Siren API usage
 
 The Python client also exposes a Siren REST client for metrics and regions.

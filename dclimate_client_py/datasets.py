@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 # --- Type Definitions ---
 
-hydrogen_endpoint = "https://dclimate-ceramic.duckdns.org/api/datasets"
-
 
 class SpatialExtent(TypedDict):
     """Bounding box for a dataset's spatial coverage."""
@@ -97,6 +95,14 @@ class DatasetMetadata(TypedDict, total=False):
     ]  # How the dataset was loaded
     organization: Optional[str]
     zarr_group: Optional[str]
+    versions_api: Optional[str]
+    provenance_api: Optional[str]
+    citation_api: Optional[str]
+    stream_id: Optional[str]
+    commit_id: Optional[str]
+    version_label: Optional[str]
+    is_citable: Optional[bool]
+    retention_class: Optional[str]
 
 
 # --- Helper Functions ---

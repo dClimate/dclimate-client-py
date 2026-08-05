@@ -6,6 +6,7 @@ which is faster than traversing the IPFS-hosted catalog structure.
 """
 
 from collections.abc import Iterator
+from dataclasses import dataclass
 from json import dumps
 from threading import Lock
 from typing import Any, Dict, Iterable, NamedTuple, Optional, Set
@@ -36,6 +37,25 @@ def _client() -> httpx.Client:
 class ResolvedDataset(NamedTuple):
     cid: str
     variant: str
+
+
+@dataclass(frozen=True)
+class ResolvedDatasetDetails:
+    """Dataset location and optional release services advertised by STAC."""
+
+    cid: str
+    variant: str
+    versions_api: Optional[str] = None
+    provenance_api: Optional[str] = None
+    citation_api: Optional[str] = None
+    stream_id: Optional[str] = None
+    commit_id: Optional[str] = None
+    version_label: Optional[str] = None
+    is_citable: Optional[bool] = None
+    retention_class: Optional[str] = None
+
+    def as_resolved_dataset(self) -> ResolvedDataset:
+        return ResolvedDataset(self.cid, self.variant)
 
 
 def _dataset_and_variant_from_item_id(
@@ -238,12 +258,12 @@ def _search_pages(
         )
 
 
-def resolve_cid_from_stac_server(
+def resolve_dataset_from_stac_server(
     collection: str,
     dataset: str,
     variant: Optional[str] = None,
     server_url: str = STAC_SERVER_URL,
-) -> ResolvedDataset:
+) -> ResolvedDatasetDetails:
     """
     Resolve dataset CID via STAC server /search API.
 
@@ -259,7 +279,7 @@ def resolve_cid_from_stac_server(
         server_url: STAC server base URL
 
     Returns:
-        ResolvedDataset: The IPFS CID and selected variant
+        ResolvedDatasetDetails: CID, selected variant, and release-service metadata
 
     Raises:
         ValueError: If dataset or variant is not found
@@ -324,13 +344,41 @@ def resolve_cid_from_stac_server(
 
     # Extract CID from asset
     selected_variant = variant if variant is not None else _effective_variant(item)
+    properties = item.get("properties") or {}
     href = item.get("assets", {}).get("data", {}).get("href", "")
-    if href.startswith("ipfs://"):
-        return ResolvedDataset(href.replace("ipfs://", ""), selected_variant)
-    if href:
-        return ResolvedDataset(href, selected_variant)
+    cid = _strip_ipfs_scheme(href) or _strip_ipfs_scheme(
+        properties.get("dclimate:latest_dataset_cid")
+    )
+    if cid:
+        return ResolvedDatasetDetails(
+            cid=cid,
+            variant=selected_variant,
+            versions_api=properties.get("dclimate:versions_api"),
+            provenance_api=properties.get("dclimate:provenance_api"),
+            citation_api=properties.get("dclimate:citation_api"),
+            stream_id=properties.get("dclimate:stream_id"),
+            commit_id=properties.get("dclimate:commit_id"),
+            version_label=properties.get("dclimate:version_label"),
+            is_citable=properties.get("dclimate:is_citable"),
+            retention_class=properties.get("dclimate:retention_class"),
+        )
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
+
+
+def resolve_cid_from_stac_server(
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    server_url: str = STAC_SERVER_URL,
+) -> ResolvedDataset:
+    """Resolve a CID while preserving the original two-field public result."""
+    return resolve_dataset_from_stac_server(
+        collection=collection,
+        dataset=dataset,
+        variant=variant,
+        server_url=server_url,
+    ).as_resolved_dataset()
 
 
 def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:

@@ -25,9 +25,12 @@ from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
     ResolvedDataset,
+    ResolvedDatasetDetails,
     resolve_cid_from_stac_server,
+    resolve_dataset_from_stac_server,
     list_available_datasets_from_stac_server,
 )
+from .ceramic_api import DatasetVersionListing, list_versions_from_url
 from .siren import SirenClient
 from .siren.types import (
     SirenMetricDataPoint,
@@ -599,6 +602,82 @@ class dClimateClient:
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
+
+    async def _resolve_dataset_details(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str],
+        organization: typing.Optional[str],
+    ) -> ResolvedDatasetDetails:
+        """Resolve release metadata through the hosted STAC API or IPFS fallback."""
+        resolved_collection = collection
+        if organization and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
+
+        if self._stac_server_url:
+            try:
+                return await asyncio.to_thread(
+                    resolve_dataset_from_stac_server,
+                    collection=resolved_collection,
+                    dataset=dataset,
+                    variant=variant,
+                    server_url=self._stac_server_url,
+                )
+            except (httpx.HTTPError, ValueError):
+                pass
+
+        from .stac_catalog import load_stac_catalog, resolve_dataset_from_stac
+
+        if self._stac_catalog is None:
+            async with self._stac_catalog_lock:
+                if self._stac_catalog is None:
+                    self._stac_catalog = await asyncio.to_thread(
+                        load_stac_catalog,
+                        gateway_url=self._catalog_gateway_base_url,
+                        headers=self._headers,
+                        auth=self._auth,
+                    )
+
+        return await asyncio.to_thread(
+            resolve_dataset_from_stac,
+            catalog=self._stac_catalog,
+            collection=resolved_collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+
+    async def list_dataset_versions(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+        *,
+        anchored: typing.Optional[bool] = None,
+        is_citable: typing.Optional[bool] = None,
+        version_label: typing.Optional[str] = None,
+    ) -> DatasetVersionListing:
+        """List releases using the version-service URL advertised by STAC."""
+        details = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+        if not details.versions_api:
+            raise ValueError(
+                "Version history is not available for "
+                f"{collection}/{dataset}/{details.variant}"
+            )
+        return await asyncio.to_thread(
+            list_versions_from_url,
+            details.versions_api,
+            anchored=anchored,
+            is_citable=is_citable,
+            version_label=version_label,
+        )
 
     # ------------------------------------------------------------------
     # Siren REST API methods
