@@ -460,7 +460,8 @@ def resolve_dataset_from_stac(
     assert selected_variant is not None
     properties = selected_item.properties or {}
     if "data" in selected_item.assets:
-        href = selected_item.assets["data"].href
+        data_asset = selected_item.assets["data"]
+        href = data_asset.href
         if href.startswith("ipfs://"):
             href = href.replace("ipfs://", "")
         return ResolvedDatasetDetails(
@@ -474,6 +475,10 @@ def resolve_dataset_from_stac(
             version_label=properties.get("dclimate:version_label"),
             is_citable=properties.get("dclimate:is_citable"),
             retention_class=properties.get("dclimate:retention_class"),
+            zarr_group=(
+                data_asset.extra_fields.get("dclimate:zarr_group")
+                or properties.get("dclimate:default_zarr_group")
+            ),
         )
 
     raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")

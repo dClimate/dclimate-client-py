@@ -24,9 +24,7 @@ from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
-    ResolvedDataset,
     ResolvedDatasetDetails,
-    resolve_cid_from_stac_server,
     resolve_dataset_from_stac_server,
     list_available_datasets_from_stac_server,
 )
@@ -377,13 +375,13 @@ class dClimateClient:
         if organization and not collection.startswith(f"{organization}_"):
             resolved_collection = f"{organization}_{collection}"
 
-        resolved: typing.Optional[ResolvedDataset] = None
+        resolved: typing.Optional[ResolvedDatasetDetails] = None
 
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
                 resolved = await asyncio.to_thread(
-                    resolve_cid_from_stac_server,
+                    resolve_dataset_from_stac_server,
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
@@ -398,7 +396,7 @@ class dClimateClient:
             from .stac_catalog import (
                 list_available_datasets,
                 load_stac_catalog,
-                resolve_dataset_cid_from_stac,
+                resolve_dataset_from_stac,
             )
 
             # Lazy load STAC catalog
@@ -426,7 +424,7 @@ class dClimateClient:
                         resolved_collection = prefixed_matches[0]
 
             resolved = await asyncio.to_thread(
-                resolve_dataset_cid_from_stac,
+                resolve_dataset_from_stac,
                 catalog=self._stac_catalog,
                 collection=resolved_collection,
                 dataset=dataset,
@@ -439,7 +437,7 @@ class dClimateClient:
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
-            zarr_group=zarr_group,
+            zarr_group=zarr_group or resolved.zarr_group,
             shard_read_mode=shard_read_mode,
         )
 

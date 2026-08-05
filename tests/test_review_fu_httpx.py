@@ -16,7 +16,7 @@ import dclimate_client_py.dclimate_client as dclimate_client_module
 from dclimate_client_py import stac_catalog
 from dclimate_client_py.dclimate_client import dClimateClient
 from dclimate_client_py.stac_catalog import IPFSStacIO
-from dclimate_client_py.stac_server import ResolvedDataset
+from dclimate_client_py.stac_server import ResolvedDatasetDetails
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -105,13 +105,13 @@ async def test_load_dataset_falls_back_when_stac_transport_is_unreachable(
         lambda loaded_catalog: {"review_collection": {"types": ["temperature"]}},
     )
 
-    def resolve_from_catalog(**kwargs: Any) -> ResolvedDataset:
+    def resolve_from_catalog(**kwargs: Any) -> ResolvedDatasetDetails:
         catalog_resolutions.append(kwargs)
-        return ResolvedDataset("bafy-fallback-dataset", "default")
+        return ResolvedDatasetDetails("bafy-fallback-dataset", "default")
 
     monkeypatch.setattr(
         stac_catalog,
-        "resolve_dataset_cid_from_stac",
+        "resolve_dataset_from_stac",
         resolve_from_catalog,
     )
 

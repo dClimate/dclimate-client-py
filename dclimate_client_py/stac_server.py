@@ -53,6 +53,7 @@ class ResolvedDatasetDetails:
     version_label: Optional[str] = None
     is_citable: Optional[bool] = None
     retention_class: Optional[str] = None
+    zarr_group: Optional[str] = None
 
     def as_resolved_dataset(self) -> ResolvedDataset:
         return ResolvedDataset(self.cid, self.variant)
@@ -345,7 +346,8 @@ def resolve_dataset_from_stac_server(
     # Extract CID from asset
     selected_variant = variant if variant is not None else _effective_variant(item)
     properties = item.get("properties") or {}
-    href = item.get("assets", {}).get("data", {}).get("href", "")
+    data_asset = item.get("assets", {}).get("data", {})
+    href = data_asset.get("href", "")
     cid = _strip_ipfs_scheme(href) or _strip_ipfs_scheme(
         properties.get("dclimate:latest_dataset_cid")
     )
@@ -361,6 +363,10 @@ def resolve_dataset_from_stac_server(
             version_label=properties.get("dclimate:version_label"),
             is_citable=properties.get("dclimate:is_citable"),
             retention_class=properties.get("dclimate:retention_class"),
+            zarr_group=(
+                data_asset.get("dclimate:zarr_group")
+                or properties.get("dclimate:default_zarr_group")
+            ),
         )
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
