@@ -31,9 +31,7 @@ class VerificationInfo:
     details: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_api_payload(
-        cls, payload: Optional[Dict[str, Any]]
-    ) -> "VerificationInfo":
+    def from_api_payload(cls, payload: Optional[Dict[str, Any]]) -> "VerificationInfo":
         payload = payload or {}
         details = dict(payload)
         anchor_status = details.pop("anchorStatus", None)
@@ -73,9 +71,7 @@ class DatasetVersion:
             release_class=payload.get("releaseClass"),
             is_citable=payload.get("isCitable"),
             retention_class=payload.get("retentionClass"),
-            verification=VerificationInfo.from_api_payload(
-                payload.get("verification")
-            ),
+            verification=VerificationInfo.from_api_payload(payload.get("verification")),
         )
 
 
