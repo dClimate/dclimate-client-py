@@ -28,7 +28,12 @@ from .stac_server import (
     resolve_dataset_from_stac_server,
     list_available_datasets_from_stac_server,
 )
-from .ceramic_api import DatasetVersionListing, list_versions_from_url
+from .ceramic_api import (
+    DatasetVersion,
+    DatasetVersionListing,
+    get_exact_version_from_url,
+    list_versions_from_url,
+)
 from .siren import SirenClient
 from .siren.types import (
     SirenMetricDataPoint,
@@ -675,6 +680,32 @@ class dClimateClient:
             anchored=anchored,
             is_citable=is_citable,
             version_label=version_label,
+        )
+
+    async def get_dataset_version(
+        self,
+        collection: str,
+        dataset: str,
+        commit_id: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+    ) -> DatasetVersion:
+        """Resolve one exact release through the version URL advertised by STAC."""
+        details = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+        if not details.versions_api:
+            raise ValueError(
+                "Version history is not available for "
+                f"{collection}/{dataset}/{details.variant}"
+            )
+        return await asyncio.to_thread(
+            get_exact_version_from_url,
+            details.versions_api,
+            commit_id,
         )
 
     # ------------------------------------------------------------------

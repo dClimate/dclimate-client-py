@@ -160,12 +160,20 @@ async def list_aigfs_versions():
     )
     for release in versions.versions:
         print(release.version_label, release.cid)
+
+    exact_version = await client.get_dataset_version(
+        collection="noaa_aigfs",
+        dataset="wind_u_forecast",
+        variant="operational",
+        commit_id="commit-id",
+    )
+    print(exact_version.cid)
 ```
 
 The lower-level functions in `dclimate_client_py.ceramic_api` retain their
 existing names and explicit `base_url` support. STAC-aware applications should
-prefer `list_dataset_versions()` so they do not need to know which service owns
-a dataset.
+prefer `list_dataset_versions()` and `get_dataset_version()` so they do not need
+to know which service owns a dataset.
 
 ## Siren API usage
 

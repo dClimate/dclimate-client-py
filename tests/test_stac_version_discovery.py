@@ -3,10 +3,11 @@ from unittest.mock import Mock
 import pytest
 import pystac
 import xarray as xr
+import httpx
 
 from dclimate_client_py import dclimate_client as client_module
 from dclimate_client_py import stac_catalog, stac_server
-from dclimate_client_py.ceramic_api import DatasetVersionListing
+from dclimate_client_py.ceramic_api import DatasetVersion, DatasetVersionListing
 from dclimate_client_py.dclimate_client import dClimateClient
 
 
@@ -195,6 +196,70 @@ async def test_client_lists_versions_from_stac_url(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "versions_url",
+    [
+        "https://hydrogen.dclimate.net/api/datasets/aigfs-wind-u/versions",
+        "https://tritium.dclimate.net/api/datasets/aigfs-wind-u/versions",
+    ],
+)
+async def test_client_gets_exact_version_from_stac_url(monkeypatch, versions_url):
+    client = dClimateClient()
+    details = stac_server.ResolvedDatasetDetails(
+        cid="bafy-current",
+        variant="operational",
+        versions_api=versions_url,
+    )
+
+    async def resolve_details(*args, **kwargs):
+        return details
+
+    exact = DatasetVersion(dataset="aigfs-wind-u", cid="bafy-exact")
+    request = Mock(return_value=exact)
+    monkeypatch.setattr(client, "_resolve_dataset_details", resolve_details)
+    monkeypatch.setattr(client_module, "get_exact_version_from_url", request)
+
+    result = await client.get_dataset_version(
+        "noaa_aigfs",
+        "wind_u_forecast",
+        "commit/with spaces?and=query#fragment",
+        "operational",
+    )
+
+    assert result is exact
+    request.assert_called_once_with(
+        versions_url, "commit/with spaces?and=query#fragment"
+    )
+
+
+@pytest.mark.asyncio
+async def test_client_propagates_exact_version_http_error(monkeypatch):
+    client = dClimateClient()
+
+    async def resolve_details(*args, **kwargs):
+        return stac_server.ResolvedDatasetDetails(
+            cid="bafy-current",
+            variant="operational",
+            versions_api="https://hydrogen.test/datasets/aigfs/versions",
+        )
+
+    request = httpx.Request("GET", "https://hydrogen.test/datasets/aigfs/versions/c")
+    response = httpx.Response(503, request=request)
+    error = httpx.HTTPStatusError("unavailable", request=request, response=response)
+    monkeypatch.setattr(client, "_resolve_dataset_details", resolve_details)
+    monkeypatch.setattr(
+        client_module,
+        "get_exact_version_from_url",
+        Mock(side_effect=error),
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        await client.get_dataset_version("noaa_aigfs", "wind_u_forecast", "commit-1")
+
+    assert raised.value.response.status_code == 503
+
+
+@pytest.mark.asyncio
 async def test_client_reports_items_without_version_history(monkeypatch):
     client = dClimateClient()
 
@@ -205,3 +270,6 @@ async def test_client_reports_items_without_version_history(monkeypatch):
 
     with pytest.raises(ValueError, match="Version history is not available"):
         await client.list_dataset_versions("copernicus_clms", "fpar")
+
+    with pytest.raises(ValueError, match="Version history is not available"):
+        await client.get_dataset_version("copernicus_clms", "fpar", "commit-1")
