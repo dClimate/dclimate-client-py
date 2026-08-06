@@ -128,6 +128,7 @@ async def test_load_dataset_reports_variant_selected_by_stac_server(monkeypatch)
         _stub_dataset_loader,
     )
     client = dClimateClient(stac_server_url="https://stac.example")
+    client._stac_http_client = stac_server._async_client()
     client._kubo_cas = object()
 
     _, metadata = await client.load_dataset(
@@ -200,6 +201,7 @@ async def test_explicit_variant_is_preserved_in_loaded_metadata(monkeypatch):
         _stub_dataset_loader,
     )
     client = dClimateClient(stac_server_url="https://stac.example")
+    client._stac_http_client = stac_server._async_client()
     client._kubo_cas = object()
 
     _, metadata = await client.load_dataset(

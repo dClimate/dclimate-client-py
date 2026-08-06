@@ -39,6 +39,7 @@ async def test_load_dataset_does_not_stall_event_loop(monkeypatch, install_httpx
     monkeypatch.setattr(dclimate_client, "_load_dataset_from_ipfs_cid", load_from_ipfs)
 
     client = dclimate_client.dClimateClient(stac_server_url="https://stac.invalid")
+    client._stac_http_client = stac_server._async_client()
     client._kubo_cas = AsyncMock()
 
     loop = asyncio.get_running_loop()

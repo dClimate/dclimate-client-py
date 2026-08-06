@@ -25,7 +25,7 @@ from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import InvalidSelectionError
 from .stac_server import (
     ResolvedDataset,
-    resolve_cid_from_stac_server,
+    aresolve_cid_from_stac_server,
     list_available_datasets_from_stac_server,
 )
 from .siren import SirenClient
@@ -37,6 +37,23 @@ from .siren.types import (
 )
 
 DEFAULT_PUBLIC_GATEWAY = "https://ipfs-gateway.dclimate.net"
+
+
+def _merge_cleanup_error(
+    current: BaseException | None,
+    new: BaseException,
+) -> BaseException:
+    """Chain cleanup failures while ensuring cancellation remains dominant."""
+    if current is None:
+        return new
+    if isinstance(current, asyncio.CancelledError) and not isinstance(
+        new, asyncio.CancelledError
+    ):
+        new.__context__ = current.__context__
+        current.__context__ = new
+        return current
+    new.__context__ = current
+    return new
 
 
 class dClimateClient:
@@ -133,6 +150,7 @@ class dClimateClient:
         self._client_factory = client_factory
         self._stac_catalog: typing.Optional["pystac.Catalog"] = None
         self._stac_catalog_lock = asyncio.Lock()
+        self._stac_http_client: typing.Optional[httpx.AsyncClient] = None
         self._kubo_cas: typing.Optional[KuboCAS] = None
         # Note: STAC catalog is loaded lazily (only if STAC server fails)
 
@@ -170,52 +188,51 @@ class dClimateClient:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Clean up KuboCAS when exiting async context."""
+        """Clean up owned HTTP and KuboCAS resources."""
         incoming_cancellation = isinstance(exc_val, asyncio.CancelledError)
-        siren_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
+
+        try:
+            if self._stac_http_client is not None:
+                await self._stac_http_client.aclose()
+        except BaseException as error:
+            cleanup_error = _merge_cleanup_error(cleanup_error, error)
+        finally:
+            self._stac_http_client = None
+
         try:
             if self._siren_client is not None:
                 await self._siren_client.aclose()
         except BaseException as error:
-            siren_error = error
+            cleanup_error = _merge_cleanup_error(cleanup_error, error)
 
         try:
             if self._kubo_cas is not None:
                 await self._kubo_cas.__aexit__(exc_type, exc_val, exc_tb)
         except BaseException as kubo_error:
-            if incoming_cancellation and not isinstance(
-                kubo_error, asyncio.CancelledError
-            ):
-                # Preserve cancellation from the context body. An ordinary
-                # cleanup failure must not replace task cancellation, but
-                # remains inspectable through the exception context chain.
-                if siren_error is not None:
-                    kubo_error.__context__ = siren_error
-                exc_val.__context__ = kubo_error
-                return False
-            if siren_error is None:
-                raise
-            # Both cleanups failed. Follow the AsyncExitStack convention (the
-            # later error propagates with the earlier as __context__), except
-            # that a cancellation always outranks an ordinary error.
-            if isinstance(siren_error, asyncio.CancelledError) and not isinstance(
-                kubo_error, asyncio.CancelledError
-            ):
-                raise siren_error
-            kubo_error.__context__ = siren_error
-            raise
+            cleanup_error = _merge_cleanup_error(cleanup_error, kubo_error)
         finally:
             self._kubo_cas = None
 
-        if siren_error is not None:
+        if cleanup_error is not None:
             if incoming_cancellation and not isinstance(
-                siren_error, asyncio.CancelledError
+                cleanup_error, asyncio.CancelledError
             ):
-                exc_val.__context__ = siren_error
+                # Preserve cancellation from the context body. Ordinary
+                # cleanup failures remain inspectable through its context.
+                exc_val.__context__ = cleanup_error
             else:
-                raise siren_error
+                raise cleanup_error
 
         return False
+
+    def _get_stac_http_client(self) -> httpx.AsyncClient:
+        """Return the pooled STAC transport owned by this client context."""
+        client = self._stac_http_client
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(timeout=30, follow_redirects=False)
+            self._stac_http_client = client
+        return client
 
     @staticmethod
     def _apply_zarr_group_metadata(ds: xr.Dataset, metadata: DatasetMetadata) -> None:
@@ -379,12 +396,12 @@ class dClimateClient:
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                resolved = await asyncio.to_thread(
-                    resolve_cid_from_stac_server,
+                resolved = await aresolve_cid_from_stac_server(
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
                     server_url=self._stac_server_url,
+                    client=self._get_stac_http_client(),
                 )
             except (httpx.HTTPError, ValueError):
                 # Fall back when server lookup fails or returns no usable match.

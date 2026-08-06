@@ -5,11 +5,13 @@ This module provides direct access to a STAC server API for resolving dataset CI
 which is faster than traversing the IPFS-hosted catalog structure.
 """
 
-from collections.abc import Iterator
+import asyncio
+import weakref
+from collections.abc import AsyncIterator, Iterator
 from json import dumps
 from threading import Lock
 from typing import Any, Dict, Iterable, NamedTuple, Optional, Set
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -21,6 +23,16 @@ STAC_SERVER_URL = "https://api.stac.dclimate.net"
 _MAX_SEARCH_PAGES = 50
 _HTTP_CLIENT: httpx.Client | None = None
 _HTTP_CLIENT_LOCK = Lock()
+_ASYNC_HTTP_CLIENTS: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, httpx.AsyncClient
+] = weakref.WeakKeyDictionary()
+_ASYNC_HTTP_CLIENT_LOCK = Lock()
+
+
+_SearchBody = Optional[Dict[str, Any]]
+_SearchHeaders = Dict[str, str]
+_SearchRequest = tuple[str, str, _SearchBody, _SearchHeaders]
+_SearchPageKey = tuple[str, str, str, str]
 
 
 def _client() -> httpx.Client:
@@ -29,8 +41,28 @@ def _client() -> httpx.Client:
     if _HTTP_CLIENT is None:
         with _HTTP_CLIENT_LOCK:
             if _HTTP_CLIENT is None:
-                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=True)
+                _HTTP_CLIENT = httpx.Client(timeout=30, follow_redirects=False)
     return _HTTP_CLIENT
+
+
+def _async_client() -> httpx.AsyncClient:
+    """Return the pooled async STAC client for the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _ASYNC_HTTP_CLIENT_LOCK:
+        client = _ASYNC_HTTP_CLIENTS.get(loop)
+        if client is None or client.is_closed:
+            client = httpx.AsyncClient(timeout=30, follow_redirects=False)
+            _ASYNC_HTTP_CLIENTS[loop] = client
+    return client
+
+
+async def aclose_stac_server_client() -> None:
+    """Close the pooled async STAC client owned by the current event loop."""
+    loop = asyncio.get_running_loop()
+    with _ASYNC_HTTP_CLIENT_LOCK:
+        client = _ASYNC_HTTP_CLIENTS.pop(loop, None)
+    if client is not None:
+        await client.aclose()
 
 
 class ResolvedDataset(NamedTuple):
@@ -154,6 +186,129 @@ def _feature_matches_dataset(
     return _dataset_id_from_item_id(feature_id, collection, dataset) == dataset
 
 
+def _search_page_key(
+    method: str,
+    url: str,
+    body: _SearchBody,
+    headers: _SearchHeaders,
+) -> _SearchPageKey:
+    """Return a stable key used to stop repeated pagination requests."""
+    return (
+        method,
+        url,
+        dumps(body, sort_keys=True, default=str),
+        dumps(headers, sort_keys=True, default=str),
+    )
+
+
+def _search_request_kwargs(
+    method: str,
+    body: _SearchBody,
+    headers: _SearchHeaders,
+    timeout: int,
+) -> Dict[str, Any]:
+    """Build transport-independent request arguments for a search page."""
+    if method == "POST":
+        request_kwargs: Dict[str, Any] = {
+            "json": body,
+            "timeout": timeout,
+            "follow_redirects": False,
+        }
+    else:
+        request_kwargs = {
+            "params": body or None,
+            "timeout": timeout,
+            "follow_redirects": False,
+        }
+    if headers:
+        request_kwargs["headers"] = headers
+    return request_kwargs
+
+
+def _url_origin(url: str) -> tuple[str, str, Optional[int]]:
+    """Return a normalized URL origin for STAC pagination validation."""
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not scheme or not hostname:
+        raise ValueError(f"STAC pagination link is not an absolute URL: {url!r}")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(
+            f"STAC pagination link has an invalid port: {url!r}"
+        ) from error
+    if port is None:
+        port = {"http": 80, "https": 443}.get(scheme)
+    return scheme, hostname, port
+
+
+def _next_search_request(
+    server_url: str,
+    current_url: str,
+    original_body: Dict[str, Any],
+    page: Dict[str, Any],
+) -> Optional[_SearchRequest]:
+    """Plan the next same-origin STAC request from a search response page."""
+    next_link = next(
+        (
+            link
+            for link in page.get("links", []) or []
+            if link.get("rel") == "next" and link.get("href")
+        ),
+        None,
+    )
+    if next_link is None:
+        return None
+
+    href = next_link["href"]
+    if not isinstance(href, str):
+        raise ValueError("STAC pagination link href must be a string")
+    next_url = urljoin(current_url, href)
+    parsed_next_url = urlsplit(next_url)
+    if (
+        _url_origin(next_url) != _url_origin(server_url)
+        or parsed_next_url.username is not None
+        or parsed_next_url.password is not None
+    ):
+        raise ValueError(
+            "STAC pagination link must use the configured server origin "
+            f"{_url_origin(server_url)!r}: {next_url!r}"
+        )
+
+    method = str(next_link.get("method", "GET")).upper()
+    if method not in {"GET", "POST"}:
+        raise ValueError(f"STAC pagination link uses an unsupported method: {method!r}")
+
+    linked_headers = next_link.get("headers")
+    # A server-provided next link may carry continuation credentials. Forward
+    # those headers only on a validated, encrypted connection to the same
+    # origin; plaintext endpoints still paginate without linked headers.
+    request_headers = (
+        linked_headers
+        if parsed_next_url.scheme.lower() == "https"
+        and isinstance(linked_headers, dict)
+        else {}
+    )
+
+    linked_body = next_link.get("body")
+    if isinstance(linked_body, dict):
+        # STAC API next-link contract: with "merge": true the linked body
+        # extends the original request (keeping filters like "collections");
+        # otherwise it replaces it wholesale.
+        request_body = (
+            {**original_body, **linked_body} if next_link.get("merge") else linked_body
+        )
+    elif next_link.get("merge"):
+        # ``merge: true`` without a link body still carries the original
+        # search filters to the next request.
+        request_body = dict(original_body)
+    else:
+        request_body = None
+
+    return next_url, method, request_body, request_headers
+
+
 def _search_pages(
     server_url: str,
     body: Dict[str, Any],
@@ -162,33 +317,22 @@ def _search_pages(
     """Yield bounded STAC search pages while following ``rel=next`` links."""
     url = f"{server_url.rstrip('/')}/search"
     method = "POST"
-    request_body: Optional[Dict[str, Any]] = body
-    request_headers: Dict[str, str] = {}
-    seen: Set[tuple[str, str, str, str]] = set()
+    request_body: _SearchBody = body
+    request_headers: _SearchHeaders = {}
+    seen: Set[_SearchPageKey] = set()
 
     for _ in range(_MAX_SEARCH_PAGES):
-        page_key = (
-            method,
-            url,
-            dumps(request_body, sort_keys=True, default=str),
-            dumps(request_headers, sort_keys=True, default=str),
-        )
+        page_key = _search_page_key(method, url, request_body, request_headers)
         if page_key in seen:
             return
         seen.add(page_key)
 
+        request_kwargs = _search_request_kwargs(
+            method, request_body, request_headers, timeout
+        )
         if method == "POST":
-            request_kwargs: Dict[str, Any] = {
-                "json": request_body,
-                "timeout": timeout,
-            }
-            if request_headers:
-                request_kwargs["headers"] = request_headers
             response = _client().post(url, **request_kwargs)
         else:
-            request_kwargs = {"params": request_body or None, "timeout": timeout}
-            if request_headers:
-                request_kwargs["headers"] = request_headers
             response = _client().get(url, **request_kwargs)
         response.raise_for_status()
         page = response.json()
@@ -196,38 +340,10 @@ def _search_pages(
 
         if not (page.get("features") or []):
             return
-        next_link = next(
-            (
-                link
-                for link in page.get("links", []) or []
-                if link.get("rel") == "next" and link.get("href")
-            ),
-            None,
-        )
-        if next_link is None:
+        next_request = _next_search_request(server_url, url, body, page)
+        if next_request is None:
             return
-
-        url = urljoin(url, next_link["href"])
-        method = str(next_link.get("method", "GET")).upper()
-        if method not in {"GET", "POST"}:
-            return
-        linked_headers = next_link.get("headers")
-        request_headers = linked_headers if isinstance(linked_headers, dict) else {}
-        linked_body = next_link.get("body")
-        if isinstance(linked_body, dict):
-            # STAC API next-link contract: with "merge": true the linked
-            # body extends the original request (keeping filters like
-            # "collections"); otherwise it replaces it wholesale.
-            if next_link.get("merge"):
-                request_body = {**body, **linked_body}
-            else:
-                request_body = linked_body
-        elif next_link.get("merge"):
-            # ``merge: true`` without a link body still carries the original
-            # search filters to the next request.
-            request_body = dict(body)
-        else:
-            request_body = None
+        url, method, request_body, request_headers = next_request
     else:
         # Reaching the bound with a valid next link means the result is
         # incomplete. Surface that explicitly so callers can use their
@@ -238,51 +354,67 @@ def _search_pages(
         )
 
 
-def resolve_cid_from_stac_server(
+async def _asearch_pages(
+    server_url: str,
+    body: Dict[str, Any],
+    timeout: int,
+    client: Optional[httpx.AsyncClient] = None,
+) -> AsyncIterator[Dict[str, Any]]:
+    """Yield bounded STAC search pages without blocking the event loop."""
+    http_client = client or _async_client()
+    url = f"{server_url.rstrip('/')}/search"
+    method = "POST"
+    request_body: _SearchBody = body
+    request_headers: _SearchHeaders = {}
+    seen: Set[_SearchPageKey] = set()
+
+    for _ in range(_MAX_SEARCH_PAGES):
+        page_key = _search_page_key(method, url, request_body, request_headers)
+        if page_key in seen:
+            return
+        seen.add(page_key)
+
+        request_kwargs = _search_request_kwargs(
+            method, request_body, request_headers, timeout
+        )
+        if method == "POST":
+            response = await http_client.post(url, **request_kwargs)
+        else:
+            response = await http_client.get(url, **request_kwargs)
+        response.raise_for_status()
+        page = response.json()
+        yield page
+
+        if not (page.get("features") or []):
+            return
+        next_request = _next_search_request(server_url, url, body, page)
+        if next_request is None:
+            return
+        url, method, request_body, request_headers = next_request
+    else:
+        raise ValueError(
+            f"STAC search reached its page limit of {_MAX_SEARCH_PAGES} "
+            "while another next link was present"
+        )
+
+
+def _resolve_dataset_from_features(
     collection: str,
     dataset: str,
-    variant: Optional[str] = None,
-    server_url: str = STAC_SERVER_URL,
+    variant: Optional[str],
+    features: Iterable[Dict[str, Any]],
 ) -> ResolvedDataset:
-    """
-    Resolve dataset CID via STAC server /search API.
-
-    Changed in 0.6: returns ResolvedDataset; variant='' is treated as an
-    explicit (unresolvable) variant rather than no-variant.
-
-    Uses the same API format as the frontend (POST /search with collections filter).
-
-    Args:
-        collection: Collection ID (e.g., 'ecmwf_aifs', 'ecmwf_era5')
-        dataset: Dataset name (e.g., 'temperature', 'precipitation')
-        variant: Optional variant name (e.g., 'ensemble', 'deterministic')
-        server_url: STAC server base URL
-
-    Returns:
-        ResolvedDataset: The IPFS CID and selected variant
-
-    Raises:
-        ValueError: If dataset or variant is not found
-        httpx.HTTPError: If the server request fails
-    """
-    # Search by collection
-    body = {
-        "limit": 100,
-        "collections": [collection],
-    }
+    """Resolve a dataset from STAC search features shared by both clients."""
+    feature_list = list(features)
 
     # An item with no variant segment/property is what the listing API
     # reports as the "default" variant — keep resolve symmetric with list.
     def _effective_variant(feature: Dict[str, Any]) -> str:
         return _feature_variant(feature, collection, dataset) or "default"
 
-    features: list[Dict[str, Any]] = []
-    for page in _search_pages(server_url, body, timeout=10):
-        features.extend(page.get("features", []) or [])
-
     known_datasets = {
         dataset_id
-        for feature in features
+        for feature in feature_list
         if isinstance(feature, dict)
         for dataset_id in [(feature.get("properties") or {}).get("dclimate:dataset_id")]
         if isinstance(dataset_id, str) and dataset_id
@@ -292,7 +424,7 @@ def resolve_cid_from_stac_server(
     # as ``precip`` and a known hyphenated dataset ``precip-daily``.
     matches = [
         feature
-        for feature in features
+        for feature in feature_list
         if _feature_matches_dataset(
             feature, collection, dataset, known_datasets=known_datasets
         )
@@ -331,6 +463,84 @@ def resolve_cid_from_stac_server(
         return ResolvedDataset(href, selected_variant)
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
+
+
+def resolve_cid_from_stac_server(
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    server_url: str = STAC_SERVER_URL,
+) -> ResolvedDataset:
+    """
+    Resolve dataset CID via STAC server /search API.
+
+    Changed in 0.6: returns ResolvedDataset; variant='' is treated as an
+    explicit (unresolvable) variant rather than no-variant.
+
+    Uses the same API format as the frontend (POST /search with collections filter).
+
+    Args:
+        collection: Collection ID (e.g., 'ecmwf_aifs', 'ecmwf_era5')
+        dataset: Dataset name (e.g., 'temperature', 'precipitation')
+        variant: Optional variant name (e.g., 'ensemble', 'deterministic')
+        server_url: STAC server base URL
+
+    Returns:
+        ResolvedDataset: The IPFS CID and selected variant
+
+    Raises:
+        ValueError: If dataset or variant is not found
+        httpx.HTTPError: If the server request fails
+    """
+    body = {
+        "limit": 100,
+        "collections": [collection],
+    }
+    features = [
+        feature
+        for page in _search_pages(server_url, body, timeout=10)
+        for feature in page.get("features", []) or []
+    ]
+    return _resolve_dataset_from_features(collection, dataset, variant, features)
+
+
+async def aresolve_cid_from_stac_server(
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    server_url: str = STAC_SERVER_URL,
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+) -> ResolvedDataset:
+    """Resolve a dataset CID natively asynchronously via the STAC API.
+
+    When ``client`` is omitted, calls reuse a pooled ``httpx.AsyncClient``
+    scoped to the current event loop. Call ``aclose_stac_server_client`` when
+    that loop shuts down. Injected clients remain caller-owned and are never
+    closed by this function.
+
+    Args:
+        collection: Collection ID (e.g., 'ecmwf_aifs', 'ecmwf_era5')
+        dataset: Dataset name (e.g., 'temperature', 'precipitation')
+        variant: Optional variant name (e.g., 'ensemble', 'deterministic')
+        server_url: STAC server base URL
+        client: Optional caller-owned pooled async HTTP client
+
+    Returns:
+        ResolvedDataset: The IPFS CID and selected variant
+
+    Raises:
+        ValueError: If dataset or variant is not found
+        httpx.HTTPError: If the server request fails
+    """
+    body = {
+        "limit": 100,
+        "collections": [collection],
+    }
+    features: list[Dict[str, Any]] = []
+    async for page in _asearch_pages(server_url, body, timeout=10, client=client):
+        features.extend(page.get("features", []) or [])
+    return _resolve_dataset_from_features(collection, dataset, variant, features)
 
 
 def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:
