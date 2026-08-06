@@ -98,32 +98,23 @@ async def test_sharded_connection_error_skips_hamt_fallback(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_multigroup_sharded_store_defaults_to_group_zero(monkeypatch):
+async def test_multigroup_sharded_store_requires_explicit_group(monkeypatch):
     open_kwargs = []
 
     async def sharded_open(**kwargs):
         open_kwargs.append(kwargs)
         return DummyGroupedStore()
 
-    opened_groups = []
-
-    def open_zarr(*, store, group=None, decode_timedelta=False):
-        assert decode_timedelta is True
-        opened_groups.append(group)
-        return xr.Dataset()
-
     monkeypatch.setattr(ipfs_retrieval.ShardedZarrStore, "open", sharded_open)
-    monkeypatch.setattr(ipfs_retrieval.xr, "open_zarr", open_zarr)
 
-    ds = await ipfs_retrieval._load_dataset_from_ipfs_cid(
-        VALID_CID,
-        DummyKuboCAS(),
-    )
+    with pytest.raises(ipfs_retrieval.MultiresolutionSelectionRequiredError) as raised:
+        await ipfs_retrieval._load_dataset_from_ipfs_cid(
+            VALID_CID,
+            DummyKuboCAS(),
+        )
 
-    assert opened_groups == ["0"]
+    assert raised.value.available_groups == ("0", "1")
     assert open_kwargs[0]["shard_read_mode"] == "sparse"
-    assert ds.attrs["_ipfs_store_type"] == "ShardedZarrStore"
-    assert ds.attrs["_ipfs_zarr_group"] == "0"
 
 
 @pytest.mark.asyncio
@@ -167,7 +158,10 @@ async def test_zarr_group_error_after_sharded_open_does_not_fallback(monkeypatch
     monkeypatch.setattr(ipfs_retrieval.HAMT, "build", hamt_build)
     monkeypatch.setattr(ipfs_retrieval.xr, "open_zarr", open_zarr)
 
-    with pytest.raises(ValueError, match="explicit Zarr group"):
+    with pytest.raises(
+        ipfs_retrieval.MultiresolutionSelectionRequiredError,
+        match="explicit zarr_group",
+    ):
         await ipfs_retrieval._load_dataset_from_ipfs_cid(
             VALID_CID,
             DummyKuboCAS(),

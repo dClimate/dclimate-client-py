@@ -95,6 +95,7 @@ class DatasetMetadata(TypedDict, total=False):
     ]  # How the dataset was loaded
     organization: Optional[str]
     zarr_group: Optional[str]
+    resolution: Optional[str]
     versions_api: Optional[str]
     provenance_api: Optional[str]
     citation_api: Optional[str]

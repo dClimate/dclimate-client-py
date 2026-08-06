@@ -14,6 +14,7 @@ from .datasets import (
 )
 from .stac_server import (
     ResolvedDataset,
+    ZarrResolution,
     aclose_stac_server_client,
     aresolve_cid_from_stac_server,
     resolve_cid_from_stac_server,
@@ -33,6 +34,9 @@ from .siren import (
     EvmSigner,
 )
 from .dclimate_zarr_errors import (
+    ConflictingResolutionSelectionError,
+    MultiresolutionSelectionRequiredError,
+    ResolutionNotAvailableError,
     SirenApiError,
     X402PaymentError,
     X402NotInstalledError,
@@ -78,11 +82,15 @@ __all__ = [
     "load_stac_catalog",
     "list_available_datasets",
     "ResolvedDataset",
+    "ZarrResolution",
     "aclose_stac_server_client",
     "aresolve_cid_from_stac_server",
     "resolve_cid_from_stac_server",
     "list_available_datasets_from_stac_server",
     "STAC_SERVER_URL",
+    "MultiresolutionSelectionRequiredError",
+    "ResolutionNotAvailableError",
+    "ConflictingResolutionSelectionError",
     # Siren
     "SirenClient",
     "SirenApiKeyAuth",

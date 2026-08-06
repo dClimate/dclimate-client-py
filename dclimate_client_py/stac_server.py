@@ -72,6 +72,15 @@ class ResolvedDataset(NamedTuple):
 
 
 @dataclass(frozen=True)
+class ZarrResolution:
+    """One explicitly selectable resolution asset advertised by STAC."""
+
+    asset_key: str
+    resolution: str
+    group: str
+
+
+@dataclass(frozen=True)
 class ResolvedDatasetDetails:
     """Dataset location and optional release services advertised by STAC."""
 
@@ -85,7 +94,7 @@ class ResolvedDatasetDetails:
     version_label: Optional[str] = None
     is_citable: Optional[bool] = None
     retention_class: Optional[str] = None
-    zarr_group: Optional[str] = None
+    zarr_resolutions: tuple[ZarrResolution, ...] = ()
 
     def as_resolved_dataset(self) -> ResolvedDataset:
         return ResolvedDataset(self.cid, self.variant)
@@ -478,11 +487,26 @@ def _resolve_dataset_from_features(
     # Extract CID from asset
     selected_variant = variant if variant is not None else _effective_variant(item)
     properties = item.get("properties") or {}
-    data_asset = item.get("assets", {}).get("data", {})
+    assets = item.get("assets", {})
+    data_asset = assets.get("data", {})
+    zarr_resolutions = tuple(
+        ZarrResolution(
+            asset_key=asset_key,
+            resolution=asset["dclimate:spatial_resolution"],
+            group=asset["dclimate:zarr_group"],
+        )
+        for asset_key, asset in assets.items()
+        if asset_key != "data"
+        and isinstance(asset, dict)
+        and isinstance(asset.get("dclimate:spatial_resolution"), str)
+        and isinstance(asset.get("dclimate:zarr_group"), str)
+    )
     href = data_asset.get("href", "")
     cid = _strip_ipfs_scheme(href) or _strip_ipfs_scheme(
         properties.get("dclimate:latest_dataset_cid")
     )
+    if not cid and zarr_resolutions:
+        cid = _strip_ipfs_scheme(assets[zarr_resolutions[0].asset_key].get("href"))
     if cid:
         return ResolvedDatasetDetails(
             cid=cid,
@@ -495,10 +519,7 @@ def _resolve_dataset_from_features(
             version_label=properties.get("dclimate:version_label"),
             is_citable=properties.get("dclimate:is_citable"),
             retention_class=properties.get("dclimate:retention_class"),
-            zarr_group=(
-                data_asset.get("dclimate:zarr_group")
-                or properties.get("dclimate:default_zarr_group")
-            ),
+            zarr_resolutions=zarr_resolutions,
         )
 
     raise ValueError(f"Item '{item['id']}' has no data asset")

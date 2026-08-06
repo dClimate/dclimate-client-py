@@ -194,6 +194,39 @@ existing names and explicit `base_url` support. STAC-aware applications should
 prefer `list_dataset_versions()` and `get_dataset_version()` so they do not need
 to know which service owns a dataset.
 
+### Multiresolution datasets
+
+Pyramidal datasets require an explicit resolution (recommended) or raw Zarr
+group. The client reports the available resolutions instead of silently
+choosing between different precision, chunking, and fetching strategies.
+
+```python
+data, metadata = await client.load_dataset(
+    collection="copernicus_clms",
+    dataset="fpar",
+    resolution="2km",
+)
+print(metadata["resolution"], metadata["zarr_group"])
+```
+
+FPAR's advertised mappings are `500m` → group `"0"`, `2km` → group `"1"`,
+and `8km` → group `"2"`. For example, replace `resolution="2km"` above with
+`"500m"` or `"8km"` to select those levels. Raw `zarr_group="1"` is supported
+when a caller intentionally works at the storage level, but do not pass it
+together with `resolution`.
+
+STAC may temporarily include a legacy `assets.data` alias for 500 m alongside
+the three named assets. The client ignores that alias when enumerating choices,
+so it is not a default or a fourth resolution. Consumers that previously
+relied on `assets.data` or implicit group `"0"` should migrate to an explicit
+resolution before the alias is removed in a future breaking release.
+
+Callers loading a direct CID have no STAC resolution mapping and must pass
+`zarr_group` when the store contains multiple groups; human-readable
+`resolution` is rejected because the mapping exists only in STAC. The STAC
+generator's `metadataGroup` is internal catalog-generation configuration and
+does not influence client selection.
+
 ## Siren API usage
 
 The Python client also exposes a Siren REST client for metrics and regions.

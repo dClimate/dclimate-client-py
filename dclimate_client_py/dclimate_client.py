@@ -22,7 +22,12 @@ from .ipfs_retrieval import _load_dataset_from_ipfs_cid
 
 from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
-from .dclimate_zarr_errors import InvalidSelectionError
+from .dclimate_zarr_errors import (
+    ConflictingResolutionSelectionError,
+    InvalidSelectionError,
+    MultiresolutionSelectionRequiredError,
+    ResolutionNotAvailableError,
+)
 from .stac_server import (
     ResolvedDatasetDetails,
     aresolve_dataset_from_stac_server,
@@ -246,6 +251,62 @@ class dClimateClient:
         if isinstance(loaded_zarr_group, str):
             metadata["zarr_group"] = loaded_zarr_group
 
+    @staticmethod
+    def _resolve_zarr_selection(
+        resolved: ResolvedDatasetDetails,
+        *,
+        resolution: typing.Optional[str],
+        zarr_group: typing.Optional[str],
+    ) -> tuple[typing.Optional[str], typing.Optional[str]]:
+        if resolution is not None and zarr_group is not None:
+            raise ConflictingResolutionSelectionError(
+                "Pass either resolution or zarr_group, not both."
+            )
+
+        choices = resolved.zarr_resolutions
+        if resolution is not None:
+            match = next(
+                (choice for choice in choices if choice.resolution == resolution),
+                None,
+            )
+            if match is None:
+                available = tuple(choice.resolution for choice in choices)
+                raise ResolutionNotAvailableError(
+                    f"Resolution '{resolution}' is not available."
+                    + (f" Choose one of: {', '.join(available)}." if available else "")
+                )
+            return match.group, match.resolution
+
+        if zarr_group is not None:
+            normalized_group = zarr_group.strip("/")
+            if choices and normalized_group not in {choice.group for choice in choices}:
+                available_groups = tuple(choice.group for choice in choices)
+                raise ResolutionNotAvailableError(
+                    f"Zarr group '{normalized_group}' is not available. "
+                    f"Choose one of: {', '.join(available_groups)}."
+                )
+            selected_resolution = next(
+                (
+                    choice.resolution
+                    for choice in choices
+                    if choice.group == normalized_group
+                ),
+                None,
+            )
+            return normalized_group, selected_resolution
+
+        if len(choices) > 1:
+            available = tuple(choice.resolution for choice in choices)
+            raise MultiresolutionSelectionRequiredError(
+                "This dataset has multiple resolutions; pass resolution or zarr_group. "
+                f"Available resolutions: {', '.join(available)}.",
+                available_resolutions=available,
+                available_groups=tuple(choice.group for choice in choices),
+            )
+        if len(choices) == 1:
+            return choices[0].group, choices[0].resolution
+        return None, None
+
     async def load_dataset(
         self,
         dataset: str,
@@ -254,6 +315,7 @@ class dClimateClient:
         organization: typing.Optional[str] = None,
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
+        resolution: typing.Optional[str] = None,
         zarr_group: typing.Optional[str] = None,
         shard_read_mode: typing.Literal["full", "sparse"] = "sparse",
     ) -> typing.Union[
@@ -288,9 +350,10 @@ class dClimateClient:
             If True, return raw xarray.Dataset. If False (default), return
             GeotemporalData wrapper.
         zarr_group : str, optional
-            Explicit Zarr group to open for grouped/pyramid sharded stores. If
-            omitted, py-hamt v2 stores with multiple top-level groups default
-            to group "0" when available.
+            Explicit Zarr group to open for grouped/pyramid sharded stores.
+        resolution : str, optional
+            Human-readable resolution advertised by STAC. Multiresolution
+            datasets require either this parameter or ``zarr_group``.
         shard_read_mode : {"full", "sparse"}, optional
             Sharded Zarr shard-index read strategy. Defaults to ``"sparse"``
             and decodes only the requested shard slot on read-only cache
@@ -342,6 +405,14 @@ class dClimateClient:
         # Case 1: Direct CID provided - bypass catalog resolution
         metadata: DatasetMetadata
         if cid:
+            if resolution is not None and zarr_group is not None:
+                raise ConflictingResolutionSelectionError(
+                    "Pass either resolution or zarr_group, not both."
+                )
+            if resolution is not None:
+                raise ResolutionNotAvailableError(
+                    "resolution requires STAC metadata; pass zarr_group for a direct CID."
+                )
             direct_collection = collection
             if (
                 organization
@@ -456,10 +527,16 @@ class dClimateClient:
 
         assert resolved is not None
 
+        selected_group, selected_resolution = self._resolve_zarr_selection(
+            resolved,
+            resolution=resolution,
+            zarr_group=zarr_group,
+        )
+
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
-            zarr_group=zarr_group or resolved.zarr_group,
+            zarr_group=selected_group,
             shard_read_mode=shard_read_mode,
         )
 
@@ -485,6 +562,8 @@ class dClimateClient:
             ),
         }
         self._apply_zarr_group_metadata(ds, metadata)
+        if selected_resolution is not None:
+            metadata["resolution"] = selected_resolution
 
         if return_xarray:
             return ds, metadata

@@ -19,6 +19,7 @@ from .datasets import SpatialExtent, TemporalExtent
 from .stac_server import (
     ResolvedDataset,
     ResolvedDatasetDetails,
+    ZarrResolution,
     _dataset_and_variant_from_item_id,
     _dataset_and_variant_from_known_datasets,
 )
@@ -459,9 +460,25 @@ def resolve_dataset_from_stac(
 
     assert selected_variant is not None
     properties = selected_item.properties or {}
-    if "data" in selected_item.assets:
-        data_asset = selected_item.assets["data"]
-        href = data_asset.href
+    zarr_resolutions = tuple(
+        ZarrResolution(
+            asset_key=asset_key,
+            resolution=asset.extra_fields["dclimate:spatial_resolution"],
+            group=asset.extra_fields["dclimate:zarr_group"],
+        )
+        for asset_key, asset in selected_item.assets.items()
+        if asset_key != "data"
+        and isinstance(asset.extra_fields.get("dclimate:spatial_resolution"), str)
+        and isinstance(asset.extra_fields.get("dclimate:zarr_group"), str)
+    )
+    data_asset = selected_item.assets.get("data")
+    selected_asset = data_asset or (
+        selected_item.assets[zarr_resolutions[0].asset_key]
+        if zarr_resolutions
+        else None
+    )
+    if selected_asset is not None:
+        href = selected_asset.href
         if href.startswith("ipfs://"):
             href = href.replace("ipfs://", "")
         return ResolvedDatasetDetails(
@@ -475,13 +492,10 @@ def resolve_dataset_from_stac(
             version_label=properties.get("dclimate:version_label"),
             is_citable=properties.get("dclimate:is_citable"),
             retention_class=properties.get("dclimate:retention_class"),
-            zarr_group=(
-                data_asset.extra_fields.get("dclimate:zarr_group")
-                or properties.get("dclimate:default_zarr_group")
-            ),
+            zarr_resolutions=zarr_resolutions,
         )
 
-    raise ValueError(f"Item '{selected_item.id}' does not have a 'data' asset")
+    raise ValueError(f"Item '{selected_item.id}' does not have a readable data asset")
 
 
 def resolve_dataset_cid_from_stac(

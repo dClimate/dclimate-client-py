@@ -7,7 +7,11 @@ import pytest
 import xarray as xr
 
 from dclimate_client_py import dclimate_client, stac_server
-from dclimate_client_py.stac_server import ResolvedDataset, ResolvedDatasetDetails
+from dclimate_client_py.stac_server import (
+    ResolvedDataset,
+    ResolvedDatasetDetails,
+    ZarrResolution,
+)
 
 
 COLLECTION = "example_collection"
@@ -320,6 +324,41 @@ async def test_async_resolver_matches_sync_selection_rules() -> None:
         )
 
     assert resolved == ResolvedDataset("bafy-default", "default")
+
+
+@pytest.mark.asyncio
+async def test_async_details_resolver_preserves_resolution_choices() -> None:
+    feature = _feature(DATASET, "default", "bafy-pyramid")
+    feature["assets"] = {
+        "data": {"href": "ipfs://bafy-pyramid"},
+        "data-500m": {
+            "href": "ipfs://bafy-pyramid",
+            "dclimate:zarr_group": "0",
+            "dclimate:spatial_resolution": "500m",
+        },
+        "data-2km": {
+            "href": "ipfs://bafy-pyramid",
+            "dclimate:zarr_group": "1",
+            "dclimate:spatial_resolution": "2km",
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"features": [feature]}, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resolved = await stac_server.aresolve_dataset_from_stac_server(
+            collection=COLLECTION,
+            dataset=DATASET,
+            server_url="https://stac.example",
+            client=client,
+        )
+
+    assert resolved.cid == "bafy-pyramid"
+    assert resolved.zarr_resolutions == (
+        ZarrResolution("data-500m", "500m", "0"),
+        ZarrResolution("data-2km", "2km", "1"),
+    )
 
 
 @pytest.mark.asyncio

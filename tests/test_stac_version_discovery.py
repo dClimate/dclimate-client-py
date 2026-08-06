@@ -9,6 +9,11 @@ from dclimate_client_py import dclimate_client as client_module
 from dclimate_client_py import stac_catalog, stac_server
 from dclimate_client_py.ceramic_api import DatasetVersion, DatasetVersionListing
 from dclimate_client_py.dclimate_client import dClimateClient
+from dclimate_client_py.dclimate_zarr_errors import (
+    ConflictingResolutionSelectionError,
+    MultiresolutionSelectionRequiredError,
+    ResolutionNotAvailableError,
+)
 
 
 def _feature(properties, *, asset_fields=None):
@@ -32,7 +37,10 @@ def test_stac_server_details_preserve_discovered_hydrogen_urls(monkeypatch):
             "dclimate:is_citable": False,
             "dclimate:retention_class": "ephemeral",
         },
-        asset_fields={"dclimate:zarr_group": "/0/"},
+        asset_fields={
+            "dclimate:zarr_group": "0",
+            "dclimate:spatial_resolution": "500m",
+        },
     )
     monkeypatch.setattr(
         stac_server,
@@ -49,11 +57,53 @@ def test_stac_server_details_preserve_discovered_hydrogen_urls(monkeypatch):
     assert details.commit_id == "commit-1"
     assert details.is_citable is False
     assert details.retention_class == "ephemeral"
-    assert details.zarr_group == "/0/"
+    assert details.zarr_resolutions == ()
     # The old API remains a two-field tuple for backwards compatibility.
     assert stac_server.resolve_cid_from_stac_server(
         "noaa_aigfs", "wind_u_forecast", "operational"
     ) == stac_server.ResolvedDataset("bafy-current", "operational")
+
+
+@pytest.mark.parametrize("include_alias", [True, False])
+def test_stac_server_treats_named_assets_as_three_resolution_choices(
+    monkeypatch, include_alias
+):
+    assets = {
+        f"data-{resolution}": {
+            "href": "ipfs://bafy-fpar",
+            "dclimate:zarr_group": group,
+            "dclimate:spatial_resolution": resolution,
+        }
+        for resolution, group in (("500m", "0"), ("2km", "1"), ("8km", "2"))
+    }
+    if include_alias:
+        assets["data"] = {
+            **assets["data-500m"],
+            "title": "Legacy compatibility alias",
+        }
+    feature = _feature(
+        {
+            "dclimate:dataset_id": "wind_u_forecast",
+            "dclimate:variant": "operational",
+        }
+    )
+    feature["assets"] = assets
+    monkeypatch.setattr(
+        stac_server,
+        "_search_pages",
+        lambda *args, **kwargs: iter([{"features": [feature]}]),
+    )
+
+    details = stac_server.resolve_dataset_from_stac_server(
+        "noaa_aigfs", "wind_u_forecast", "operational"
+    )
+
+    assert len(details.zarr_resolutions) == 3
+    assert {choice.asset_key for choice in details.zarr_resolutions} == {
+        "data-500m",
+        "data-2km",
+        "data-8km",
+    }
 
 
 def test_ipfs_stac_details_preserve_discovered_tritium_url():
@@ -81,12 +131,12 @@ def test_ipfs_stac_details_preserve_discovered_tritium_url():
                 "https://tritium.dclimate.net/api/datasets/"
                 "era5-temperature-2m-finalized/versions"
             ),
-            "dclimate:default_zarr_group": "1",
         },
     )
     data_asset = pystac.Asset(href="ipfs://bafy-era5")
     data_asset.extra_fields["dclimate:zarr_group"] = "0"
-    item.add_asset("data", data_asset)
+    data_asset.extra_fields["dclimate:spatial_resolution"] = "500m"
+    item.add_asset("data-500m", data_asset)
     collection.add_item(item)
     collection_link = organization.add_child(collection)
     collection_link.extra_fields["dclimate:id"] = "ecmwf_era5"
@@ -107,25 +157,23 @@ def test_ipfs_stac_details_preserve_discovered_tritium_url():
         "https://tritium.dclimate.net/api/datasets/"
         "era5-temperature-2m-finalized/versions"
     )
-    assert details.zarr_group == "0"
-
-    data_asset.extra_fields.pop("dclimate:zarr_group")
-    fallback_details = stac_catalog.resolve_dataset_from_stac(
-        catalog, "ecmwf_era5", "temperature_2m", "finalized"
+    assert details.zarr_resolutions == (
+        stac_server.ZarrResolution("data-500m", "500m", "0"),
     )
-    assert fallback_details.zarr_group == "1"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("explicit_group", "expected_group"),
-    [(None, "0"), ("/2/", "/2/")],
-)
-async def test_client_prefers_explicit_group_over_stac(
-    monkeypatch, explicit_group, expected_group
+@pytest.mark.parametrize(("resolution", "group"), [("500m", None), (None, "/2/")])
+async def test_client_requires_explicit_resolution_or_group(
+    monkeypatch, resolution, group
 ):
     details = stac_server.ResolvedDatasetDetails(
-        cid="bafy-grouped", variant="default", zarr_group="0"
+        cid="bafy-grouped",
+        variant="default",
+        zarr_resolutions=(
+            stac_server.ZarrResolution("data-500m", "500m", "0"),
+            stac_server.ZarrResolution("data-2km", "2km", "2"),
+        ),
     )
 
     async def aresolve(**kwargs):
@@ -141,7 +189,7 @@ async def test_client_prefers_explicit_group_over_stac(
 
     async def load_dataset_from_ipfs_cid(**kwargs):
         observed_groups.append(kwargs["zarr_group"])
-        normalized = kwargs["zarr_group"].strip("/")
+        normalized = kwargs["zarr_group"]
         return xr.Dataset(attrs={"_ipfs_zarr_group": normalized})
 
     monkeypatch.setattr(
@@ -155,12 +203,50 @@ async def test_client_prefers_explicit_group_over_stac(
     _, metadata = await client.load_dataset(
         dataset="pyramid",
         collection="test_grouped",
-        zarr_group=explicit_group,
+        resolution=resolution,
+        zarr_group=group,
         return_xarray=True,
     )
 
+    expected_group = "0" if resolution == "500m" else "2"
     assert observed_groups == [expected_group]
-    assert metadata["zarr_group"] == expected_group.strip("/")
+    assert metadata["zarr_group"] == expected_group
+    assert metadata["resolution"] == (resolution or "2km")
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_ambiguous_or_invalid_resolution_selection(monkeypatch):
+    details = stac_server.ResolvedDatasetDetails(
+        cid="bafy-grouped",
+        variant="default",
+        zarr_resolutions=(
+            stac_server.ZarrResolution("data-500m", "500m", "0"),
+            stac_server.ZarrResolution("data-2km", "2km", "1"),
+        ),
+    )
+    async def aresolve(**kwargs):
+        return details
+
+    monkeypatch.setattr(client_module, "aresolve_dataset_from_stac_server", aresolve)
+    client = dClimateClient(stac_server_url="https://stac.test")
+    client._kubo_cas = object()
+
+    with pytest.raises(MultiresolutionSelectionRequiredError) as required:
+        await client.load_dataset(dataset="pyramid", collection="test_grouped")
+    assert required.value.available_resolutions == ("500m", "2km")
+
+    with pytest.raises(ResolutionNotAvailableError, match="10km"):
+        await client.load_dataset(
+            dataset="pyramid", collection="test_grouped", resolution="10km"
+        )
+
+    with pytest.raises(ConflictingResolutionSelectionError):
+        await client.load_dataset(
+            dataset="pyramid",
+            collection="test_grouped",
+            resolution="500m",
+            zarr_group="0",
+        )
 
 
 @pytest.mark.asyncio
