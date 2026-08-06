@@ -141,6 +141,25 @@ for collection_id, info in datasets.items():
     )
     print(f"  Dataset types: {', '.join(info['types'])}")
 
+# Resolve a CID directly without blocking the event loop. Calls made without
+# an injected client reuse a pooled httpx.AsyncClient for the current loop.
+from dclimate_client_py import (
+    aclose_stac_server_client,
+    aresolve_cid_from_stac_server,
+)
+
+async def resolve_cid():
+    try:
+        resolved = await aresolve_cid_from_stac_server(
+            collection="ecmwf_aifs",
+            dataset="temperature_forecast",
+            variant="single",
+        )
+        print(resolved.cid)
+    finally:
+        # Call once when an application event loop shuts down.
+        await aclose_stac_server_client()
+
 ```
 
 ### Dataset version history

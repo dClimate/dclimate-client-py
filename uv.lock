@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -730,7 +730,7 @@ requires-dist = [
     { name = "opentelemetry-api", specifier = ">=1.30.0" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "py-hamt", specifier = ">=3.5.0" },
+    { name = "py-hamt", specifier = ">=3.6.0" },
     { name = "pycryptodome", specifier = ">=3.21.0" },
     { name = "pystac", specifier = ">=1.10.0" },
     { name = "pytest", marker = "extra == 'testing'" },
@@ -1631,7 +1631,7 @@ wheels = [
 
 [[package]]
 name = "py-hamt"
-version = "3.5.0"
+version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dag-cbor" },
@@ -1642,9 +1642,9 @@ dependencies = [
     { name = "pycryptodome" },
     { name = "zarr" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/ad/42f19faceb109c85f457249b77aa6da95f63b30ff08aa350be32197b251e/py_hamt-3.5.0.tar.gz", hash = "sha256:5f0cc81fd9a360c481bc835163d2acfaa0862cf6544f5f9ea103cc3b1c17bd70", size = 296183, upload-time = "2026-07-21T15:11:40.521Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a6/4a/783c03018f642a8df17b1dbfb46968209c656636dd0e5c1008cb80320609/py_hamt-3.6.0.tar.gz", hash = "sha256:7839aeb9a5ec8fede281521b10afdfc632a119c2db1dd7fd7d2374e9eca0fd09", size = 326698, upload-time = "2026-07-30T12:15:35.036Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/e4/c003760c4af897b47e1e18bef8bfa828f279cb9b1fd7ee86ffdf290b0b37/py_hamt-3.5.0-py3-none-any.whl", hash = "sha256:5e06627d3105ff92b3ece3f0dae5ebd9003117ea976a8740919dfec47eeaffb2", size = 70398, upload-time = "2026-07-21T15:11:39.513Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/f3/8ea8b9d21e0b36490bff3e3524994d64d3365ef184138f2b568fa0326ed7/py_hamt-3.6.0-py3-none-any.whl", hash = "sha256:9b20fa474b84f5a112ebd61093fbab2613117b0ede8fa4fd5114605110e647da", size = 81309, upload-time = "2026-07-30T12:15:33.917Z" },
 ]
 
 [[package]]

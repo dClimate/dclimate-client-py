@@ -128,10 +128,13 @@ async def test_client_prefers_explicit_group_over_stac(
         cid="bafy-grouped", variant="default", zarr_group="0"
     )
 
+    async def aresolve(**kwargs):
+        return details
+
     monkeypatch.setattr(
         client_module,
-        "resolve_dataset_from_stac_server",
-        lambda **kwargs: details,
+        "aresolve_dataset_from_stac_server",
+        aresolve,
     )
 
     observed_groups = []

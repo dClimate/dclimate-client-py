@@ -1,3 +1,4 @@
+import asyncio
 import datetime
 import itertools
 import pathlib
@@ -15,8 +16,9 @@ from tests.ipfs_config import IPFS_GATEWAY_URL, IPFS_RPC_URL, STAC_CATALOG_URL
 
 @pytest.fixture
 def install_httpx_mock(monkeypatch):
-    """Inject a pooled MockTransport client through a module's client accessor."""
+    """Inject pooled sync and async clients through a module's accessors."""
     clients: list[httpx.Client] = []
+    async_clients: list[httpx.AsyncClient] = []
 
     def install(module, handler):
         client = httpx.Client(
@@ -24,14 +26,27 @@ def install_httpx_mock(monkeypatch):
             timeout=30,
             follow_redirects=True,
         )
+
+        async def async_handler(request: httpx.Request) -> httpx.Response:
+            return await asyncio.to_thread(handler, request)
+
+        async_client = httpx.AsyncClient(
+            transport=httpx.MockTransport(async_handler),
+            timeout=30,
+            follow_redirects=True,
+        )
         clients.append(client)
+        async_clients.append(async_client)
         monkeypatch.setattr(module, "_client", lambda: client)
+        monkeypatch.setattr(module, "_async_client", lambda: async_client)
         return client
 
     yield install
 
     for client in clients:
         client.close()
+    for async_client in async_clients:
+        asyncio.run(async_client.aclose())
 
 
 def pytest_addoption(parser):

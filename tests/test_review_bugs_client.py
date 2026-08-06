@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from dclimate_client_py.dclimate_client import dClimateClient
@@ -31,6 +32,33 @@ async def test_aexit_forwards_with_block_exception_to_kubo():
 
     kubo_cas.__aexit__.assert_awaited_once_with(ValueError, exc, None)
     assert client._kubo_cas is None
+
+
+@pytest.mark.asyncio
+async def test_aexit_closes_owned_stac_client():
+    client, kubo_cas, _ = _client_with_mocks()
+    stac_http_client = AsyncMock(spec=httpx.AsyncClient)
+    client._stac_http_client = stac_http_client
+
+    await client.__aexit__(None, None, None)
+
+    stac_http_client.aclose.assert_awaited_once()
+    kubo_cas.__aexit__.assert_awaited_once_with(None, None, None)
+    assert client._stac_http_client is None
+
+
+@pytest.mark.asyncio
+async def test_aexit_still_closes_kubo_when_stac_close_raises():
+    client, kubo_cas, _ = _client_with_mocks()
+    stac_http_client = AsyncMock(spec=httpx.AsyncClient)
+    stac_http_client.aclose.side_effect = RuntimeError("STAC close failed")
+    client._stac_http_client = stac_http_client
+
+    with pytest.raises(RuntimeError, match="STAC close failed"):
+        await client.__aexit__(None, None, None)
+
+    kubo_cas.__aexit__.assert_awaited_once_with(None, None, None)
+    assert client._stac_http_client is None
 
 
 @pytest.mark.asyncio
