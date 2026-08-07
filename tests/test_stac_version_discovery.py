@@ -244,6 +244,7 @@ async def test_client_rejects_ambiguous_or_invalid_resolution_selection(monkeypa
             stac_server.ZarrResolution("data-2km", "2km", "1"),
         ),
     )
+
     async def aresolve(**kwargs):
         return details
 
