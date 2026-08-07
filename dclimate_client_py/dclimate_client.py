@@ -315,9 +315,9 @@ class dClimateClient:
         organization: typing.Optional[str] = None,
         cid: typing.Optional[str] = None,
         return_xarray: bool = False,
-        resolution: typing.Optional[str] = None,
         zarr_group: typing.Optional[str] = None,
         shard_read_mode: typing.Literal["full", "sparse"] = "sparse",
+        resolution: typing.Optional[str] = None,
     ) -> typing.Union[
         typing.Tuple[GeotemporalData, DatasetMetadata],
         typing.Tuple[xr.Dataset, DatasetMetadata],
@@ -753,7 +753,11 @@ class dClimateClient:
             except (httpx.HTTPError, ValueError):
                 pass
 
-        from .stac_catalog import load_stac_catalog, resolve_dataset_from_stac
+        from .stac_catalog import (
+            list_available_datasets,
+            load_stac_catalog,
+            resolve_dataset_from_stac,
+        )
 
         if self._stac_catalog is None:
             async with self._stac_catalog_lock:
@@ -764,6 +768,19 @@ class dClimateClient:
                         headers=self._headers,
                         auth=self._auth,
                     )
+
+        if not organization and resolved_collection:
+            available = await asyncio.to_thread(
+                list_available_datasets, self._stac_catalog
+            )
+            if resolved_collection not in available:
+                prefixed_matches = [
+                    coll_id
+                    for coll_id in available
+                    if coll_id.endswith(f"_{resolved_collection}")
+                ]
+                if len(prefixed_matches) == 1:
+                    resolved_collection = prefixed_matches[0]
 
         return await asyncio.to_thread(
             resolve_dataset_from_stac,

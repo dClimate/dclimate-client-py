@@ -383,3 +383,39 @@ async def test_client_reports_items_without_version_history(monkeypatch):
 
     with pytest.raises(ValueError, match="Version history is not available"):
         await client.get_dataset_version("copernicus_clms", "fpar", "commit-1")
+
+
+@pytest.mark.asyncio
+async def test_version_catalog_fallback_normalizes_shorthand_collection(monkeypatch):
+    catalog = object()
+    resolved = stac_server.ResolvedDatasetDetails(
+        cid="bafy-era5",
+        variant="finalized",
+        versions_api="https://versions.test/era5/versions",
+    )
+    resolver = Mock(return_value=resolved)
+
+    monkeypatch.setattr(stac_catalog, "load_stac_catalog", Mock(return_value=catalog))
+    monkeypatch.setattr(
+        stac_catalog,
+        "list_available_datasets",
+        Mock(return_value={"ecmwf_era5": {}}),
+    )
+    monkeypatch.setattr(stac_catalog, "resolve_dataset_from_stac", resolver)
+    client = dClimateClient(stac_server_url=None)
+
+    details = await client._resolve_dataset_details(
+        collection="era5",
+        dataset="temperature_2m",
+        variant="finalized",
+        organization=None,
+    )
+
+    assert details is resolved
+    resolver.assert_called_once_with(
+        catalog=catalog,
+        collection="ecmwf_era5",
+        dataset="temperature_2m",
+        variant="finalized",
+        organization=None,
+    )

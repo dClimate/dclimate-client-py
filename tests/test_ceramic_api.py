@@ -177,7 +177,7 @@ class CeramicApiTests(unittest.TestCase):
         self.assertEqual(len(anchored), 1)
         self.assertEqual(anchored[0].commit_id, "commit-1")
 
-    def test_get_latest_anchored_version_picks_newest_timestamp(self):
+    def test_get_latest_anchored_version_preserves_service_event_order(self):
         session = Mock()
         session.get.return_value = _mock_response(
             {
@@ -188,14 +188,14 @@ class CeramicApiTests(unittest.TestCase):
                         "dataset": "eagle-temp",
                         "cid": "cid-1",
                         "commitId": "commit-1",
-                        "timestamp": 100,
+                        "timestamp": 200,
                         "verification": {"anchorStatus": "anchored"},
                     },
                     {
                         "dataset": "eagle-temp",
                         "cid": "cid-2",
                         "commitId": "commit-2",
-                        "timestamp": 200,
+                        "timestamp": 100,
                         "verification": {"anchorStatus": "anchored"},
                     },
                 ],

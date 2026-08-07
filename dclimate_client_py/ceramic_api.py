@@ -303,13 +303,6 @@ def get_latest_anchored_version(
     anchored_versions = filter_anchored_versions(listing.versions)
     if not anchored_versions:
         raise ValueError(f"No anchored versions found for dataset '{dataset}'")
-    anchored_versions.sort(
-        key=lambda version: (
-            version.timestamp if version.timestamp is not None else -1,
-            version.published_at or "",
-            version.commit_id or "",
-        )
-    )
     return anchored_versions[-1]
 
 

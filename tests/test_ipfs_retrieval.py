@@ -265,3 +265,27 @@ async def test_client_direct_cid_passes_zarr_group_and_records_metadata(monkeypa
 
     assert isinstance(ds, xr.Dataset)
     assert metadata["zarr_group"] == "2"
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_positional_zarr_group_and_shard_mode(monkeypatch):
+    observed = []
+
+    async def load_dataset_from_ipfs_cid(**kwargs):
+        observed.append((kwargs["zarr_group"], kwargs["shard_read_mode"]))
+        return xr.Dataset(attrs={"_ipfs_zarr_group": kwargs["zarr_group"]})
+
+    monkeypatch.setattr(
+        dclimate_client_module,
+        "_load_dataset_from_ipfs_cid",
+        load_dataset_from_ipfs_cid,
+    )
+    dclimate = dClimateClient()
+    dclimate._kubo_cas = DummyKuboCAS()
+
+    _, metadata = await dclimate.load_dataset(
+        "pyramid", None, None, None, VALID_CID, True, "2", "full"
+    )
+
+    assert observed == [("2", "full")]
+    assert metadata["zarr_group"] == "2"
