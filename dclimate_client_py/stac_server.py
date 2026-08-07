@@ -8,6 +8,7 @@ which is faster than traversing the IPFS-hosted catalog structure.
 import asyncio
 import weakref
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from json import dumps
 from threading import Lock
 from typing import Any, Dict, Iterable, NamedTuple, Optional, Set
@@ -68,6 +69,49 @@ async def aclose_stac_server_client() -> None:
 class ResolvedDataset(NamedTuple):
     cid: str
     variant: str
+
+
+@dataclass(frozen=True)
+class ZarrResolution:
+    """One explicitly selectable resolution asset advertised by STAC."""
+
+    asset_key: str
+    resolution: str
+    group: str
+
+
+def _dedupe_zarr_resolutions(
+    resolutions: Iterable[ZarrResolution],
+) -> tuple[ZarrResolution, ...]:
+    """Deduplicate equivalent resolution/group mappings, preserving asset order."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[ZarrResolution] = []
+    for choice in resolutions:
+        key = (choice.resolution, choice.group)
+        if key not in seen:
+            seen.add(key)
+            unique.append(choice)
+    return tuple(unique)
+
+
+@dataclass(frozen=True)
+class ResolvedDatasetDetails:
+    """Dataset location and optional release services advertised by STAC."""
+
+    cid: str
+    variant: str
+    versions_api: Optional[str] = None
+    provenance_api: Optional[str] = None
+    citation_api: Optional[str] = None
+    stream_id: Optional[str] = None
+    commit_id: Optional[str] = None
+    version_label: Optional[str] = None
+    is_citable: Optional[bool] = None
+    retention_class: Optional[str] = None
+    zarr_resolutions: tuple[ZarrResolution, ...] = ()
+
+    def as_resolved_dataset(self) -> ResolvedDataset:
+        return ResolvedDataset(self.cid, self.variant)
 
 
 def _dataset_and_variant_from_item_id(
@@ -403,7 +447,7 @@ def _resolve_dataset_from_features(
     dataset: str,
     variant: Optional[str],
     features: Iterable[Dict[str, Any]],
-) -> ResolvedDataset:
+) -> ResolvedDatasetDetails:
     """Resolve a dataset from STAC search features shared by both clients."""
     feature_list = list(features)
 
@@ -456,21 +500,51 @@ def _resolve_dataset_from_features(
 
     # Extract CID from asset
     selected_variant = variant if variant is not None else _effective_variant(item)
-    href = item.get("assets", {}).get("data", {}).get("href", "")
-    if href.startswith("ipfs://"):
-        return ResolvedDataset(href.replace("ipfs://", ""), selected_variant)
-    if href:
-        return ResolvedDataset(href, selected_variant)
+    properties = item.get("properties") or {}
+    assets = item.get("assets", {})
+    data_asset = assets.get("data", {})
+    zarr_resolutions = _dedupe_zarr_resolutions(
+        ZarrResolution(
+            asset_key=asset_key,
+            resolution=asset["dclimate:spatial_resolution"],
+            group=asset["dclimate:zarr_group"],
+        )
+        for asset_key, asset in assets.items()
+        if asset_key != "data"
+        and isinstance(asset, dict)
+        and isinstance(asset.get("dclimate:spatial_resolution"), str)
+        and isinstance(asset.get("dclimate:zarr_group"), str)
+    )
+    href = data_asset.get("href", "")
+    cid = _strip_ipfs_scheme(href) or _strip_ipfs_scheme(
+        properties.get("dclimate:latest_dataset_cid")
+    )
+    if not cid and zarr_resolutions:
+        cid = _strip_ipfs_scheme(assets[zarr_resolutions[0].asset_key].get("href"))
+    if cid:
+        return ResolvedDatasetDetails(
+            cid=cid,
+            variant=selected_variant,
+            versions_api=properties.get("dclimate:versions_api"),
+            provenance_api=properties.get("dclimate:provenance_api"),
+            citation_api=properties.get("dclimate:citation_api"),
+            stream_id=properties.get("dclimate:stream_id"),
+            commit_id=properties.get("dclimate:commit_id"),
+            version_label=properties.get("dclimate:version_label"),
+            is_citable=properties.get("dclimate:is_citable"),
+            retention_class=properties.get("dclimate:retention_class"),
+            zarr_resolutions=zarr_resolutions,
+        )
 
     raise ValueError(f"Item '{item['id']}' has no data asset")
 
 
-def resolve_cid_from_stac_server(
+def resolve_dataset_from_stac_server(
     collection: str,
     dataset: str,
     variant: Optional[str] = None,
     server_url: str = STAC_SERVER_URL,
-) -> ResolvedDataset:
+) -> ResolvedDatasetDetails:
     """
     Resolve dataset CID via STAC server /search API.
 
@@ -486,7 +560,7 @@ def resolve_cid_from_stac_server(
         server_url: STAC server base URL
 
     Returns:
-        ResolvedDataset: The IPFS CID and selected variant
+        ResolvedDatasetDetails: CID, selected variant, and release-service metadata
 
     Raises:
         ValueError: If dataset or variant is not found
@@ -504,20 +578,20 @@ def resolve_cid_from_stac_server(
     return _resolve_dataset_from_features(collection, dataset, variant, features)
 
 
-async def aresolve_cid_from_stac_server(
+async def aresolve_dataset_from_stac_server(
     collection: str,
     dataset: str,
     variant: Optional[str] = None,
     server_url: str = STAC_SERVER_URL,
     *,
     client: Optional[httpx.AsyncClient] = None,
-) -> ResolvedDataset:
-    """Resolve a dataset CID natively asynchronously via the STAC API.
+) -> ResolvedDatasetDetails:
+    """Resolve dataset details natively asynchronously via the STAC API.
 
-    When ``client`` is omitted, calls reuse a pooled ``httpx.AsyncClient``
-    scoped to the current event loop. Call ``aclose_stac_server_client`` when
-    that loop shuts down. Injected clients remain caller-owned and are never
-    closed by this function.
+    Async counterpart of ``resolve_dataset_from_stac_server``. When ``client``
+    is omitted, calls reuse a pooled ``httpx.AsyncClient`` scoped to the current
+    event loop. Call ``aclose_stac_server_client`` when that loop shuts down.
+    Injected clients remain caller-owned and are never closed by this function.
 
     Args:
         collection: Collection ID (e.g., 'ecmwf_aifs', 'ecmwf_era5')
@@ -527,7 +601,7 @@ async def aresolve_cid_from_stac_server(
         client: Optional caller-owned pooled async HTTP client
 
     Returns:
-        ResolvedDataset: The IPFS CID and selected variant
+        ResolvedDatasetDetails: CID, selected variant, and release-service metadata
 
     Raises:
         ValueError: If dataset or variant is not found
@@ -541,6 +615,43 @@ async def aresolve_cid_from_stac_server(
     async for page in _asearch_pages(server_url, body, timeout=10, client=client):
         features.extend(page.get("features", []) or [])
     return _resolve_dataset_from_features(collection, dataset, variant, features)
+
+
+def resolve_cid_from_stac_server(
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    server_url: str = STAC_SERVER_URL,
+) -> ResolvedDataset:
+    """Resolve a CID while preserving the original two-field public result."""
+    return resolve_dataset_from_stac_server(
+        collection=collection,
+        dataset=dataset,
+        variant=variant,
+        server_url=server_url,
+    ).as_resolved_dataset()
+
+
+async def aresolve_cid_from_stac_server(
+    collection: str,
+    dataset: str,
+    variant: Optional[str] = None,
+    server_url: str = STAC_SERVER_URL,
+    *,
+    client: Optional[httpx.AsyncClient] = None,
+) -> ResolvedDataset:
+    """Async counterpart of ``resolve_cid_from_stac_server``.
+
+    See ``aresolve_dataset_from_stac_server`` for client-ownership semantics.
+    """
+    resolved = await aresolve_dataset_from_stac_server(
+        collection=collection,
+        dataset=dataset,
+        variant=variant,
+        server_url=server_url,
+        client=client,
+    )
+    return resolved.as_resolved_dataset()
 
 
 def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:

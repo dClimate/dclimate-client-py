@@ -66,6 +66,29 @@ class InvalidSelectionError(ZarrClientError):
     """Raised when dataset/collection/variant selection is invalid or ambiguous"""
 
 
+class MultiresolutionSelectionRequiredError(InvalidSelectionError):
+    """Raised when a pyramidal dataset requires an explicit resolution or group."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        available_resolutions: tuple[str, ...] = (),
+        available_groups: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.available_resolutions = available_resolutions
+        self.available_groups = available_groups
+
+
+class ResolutionNotAvailableError(InvalidSelectionError):
+    """Raised when a requested resolution is not advertised by STAC."""
+
+
+class ConflictingResolutionSelectionError(InvalidSelectionError):
+    """Raised when both resolution and raw Zarr group are provided."""
+
+
 class VariantNotFoundError(ZarrClientError):
     """Raised when specified variant is not found in dataset"""
 

@@ -22,11 +22,22 @@ from .ipfs_retrieval import _load_dataset_from_ipfs_cid
 
 from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
-from .dclimate_zarr_errors import InvalidSelectionError
+from .dclimate_zarr_errors import (
+    ConflictingResolutionSelectionError,
+    InvalidSelectionError,
+    MultiresolutionSelectionRequiredError,
+    ResolutionNotAvailableError,
+)
 from .stac_server import (
-    ResolvedDataset,
-    aresolve_cid_from_stac_server,
+    ResolvedDatasetDetails,
+    aresolve_dataset_from_stac_server,
     list_available_datasets_from_stac_server,
+)
+from .ceramic_api import (
+    DatasetVersion,
+    DatasetVersionListing,
+    get_exact_version_from_url,
+    list_versions_from_url,
 )
 from .siren import SirenClient
 from .siren.types import (
@@ -240,6 +251,62 @@ class dClimateClient:
         if isinstance(loaded_zarr_group, str):
             metadata["zarr_group"] = loaded_zarr_group
 
+    @staticmethod
+    def _resolve_zarr_selection(
+        resolved: ResolvedDatasetDetails,
+        *,
+        resolution: typing.Optional[str],
+        zarr_group: typing.Optional[str],
+    ) -> tuple[typing.Optional[str], typing.Optional[str]]:
+        if resolution is not None and zarr_group is not None:
+            raise ConflictingResolutionSelectionError(
+                "Pass either resolution or zarr_group, not both."
+            )
+
+        choices = resolved.zarr_resolutions
+        if resolution is not None:
+            match = next(
+                (choice for choice in choices if choice.resolution == resolution),
+                None,
+            )
+            if match is None:
+                available = tuple(choice.resolution for choice in choices)
+                raise ResolutionNotAvailableError(
+                    f"Resolution '{resolution}' is not available."
+                    + (f" Choose one of: {', '.join(available)}." if available else "")
+                )
+            return match.group, match.resolution
+
+        if zarr_group is not None:
+            normalized_group = zarr_group.strip("/")
+            if choices and normalized_group not in {choice.group for choice in choices}:
+                available_groups = tuple(choice.group for choice in choices)
+                raise ResolutionNotAvailableError(
+                    f"Zarr group '{normalized_group}' is not available. "
+                    f"Choose one of: {', '.join(available_groups)}."
+                )
+            selected_resolution = next(
+                (
+                    choice.resolution
+                    for choice in choices
+                    if choice.group == normalized_group
+                ),
+                None,
+            )
+            return normalized_group, selected_resolution
+
+        if len(choices) > 1:
+            available = tuple(choice.resolution for choice in choices)
+            raise MultiresolutionSelectionRequiredError(
+                "This dataset has multiple resolutions; pass resolution or zarr_group. "
+                f"Available resolutions: {', '.join(available)}.",
+                available_resolutions=available,
+                available_groups=tuple(choice.group for choice in choices),
+            )
+        if len(choices) == 1:
+            return choices[0].group, choices[0].resolution
+        return None, None
+
     async def load_dataset(
         self,
         dataset: str,
@@ -250,6 +317,7 @@ class dClimateClient:
         return_xarray: bool = False,
         zarr_group: typing.Optional[str] = None,
         shard_read_mode: typing.Literal["full", "sparse"] = "sparse",
+        resolution: typing.Optional[str] = None,
     ) -> typing.Union[
         typing.Tuple[GeotemporalData, DatasetMetadata],
         typing.Tuple[xr.Dataset, DatasetMetadata],
@@ -282,9 +350,10 @@ class dClimateClient:
             If True, return raw xarray.Dataset. If False (default), return
             GeotemporalData wrapper.
         zarr_group : str, optional
-            Explicit Zarr group to open for grouped/pyramid sharded stores. If
-            omitted, py-hamt v2 stores with multiple top-level groups default
-            to group "0" when available.
+            Explicit Zarr group to open for grouped/pyramid sharded stores.
+        resolution : str, optional
+            Human-readable resolution advertised by STAC. Multiresolution
+            datasets require either this parameter or ``zarr_group``.
         shard_read_mode : {"full", "sparse"}, optional
             Sharded Zarr shard-index read strategy. Defaults to ``"sparse"``
             and decodes only the requested shard slot on read-only cache
@@ -336,6 +405,14 @@ class dClimateClient:
         # Case 1: Direct CID provided - bypass catalog resolution
         metadata: DatasetMetadata
         if cid:
+            if resolution is not None and zarr_group is not None:
+                raise ConflictingResolutionSelectionError(
+                    "Pass either resolution or zarr_group, not both."
+                )
+            if resolution is not None:
+                raise ResolutionNotAvailableError(
+                    "resolution requires STAC metadata; pass zarr_group for a direct CID."
+                )
             direct_collection = collection
             if (
                 organization
@@ -391,12 +468,12 @@ class dClimateClient:
         if organization and not collection.startswith(f"{organization}_"):
             resolved_collection = f"{organization}_{collection}"
 
-        resolved: typing.Optional[ResolvedDataset] = None
+        resolved: typing.Optional[ResolvedDatasetDetails] = None
 
         # Try STAC server first (faster, avoids loading IPFS catalog)
         if self._stac_server_url:
             try:
-                resolved = await aresolve_cid_from_stac_server(
+                resolved = await aresolve_dataset_from_stac_server(
                     collection=resolved_collection,
                     dataset=dataset,
                     variant=variant,
@@ -412,7 +489,7 @@ class dClimateClient:
             from .stac_catalog import (
                 list_available_datasets,
                 load_stac_catalog,
-                resolve_dataset_cid_from_stac,
+                resolve_dataset_from_stac,
             )
 
             # Lazy load STAC catalog
@@ -440,7 +517,7 @@ class dClimateClient:
                         resolved_collection = prefixed_matches[0]
 
             resolved = await asyncio.to_thread(
-                resolve_dataset_cid_from_stac,
+                resolve_dataset_from_stac,
                 catalog=self._stac_catalog,
                 collection=resolved_collection,
                 dataset=dataset,
@@ -450,10 +527,16 @@ class dClimateClient:
 
         assert resolved is not None
 
+        selected_group, selected_resolution = self._resolve_zarr_selection(
+            resolved,
+            resolution=resolution,
+            zarr_group=zarr_group,
+        )
+
         ds = await _load_dataset_from_ipfs_cid(
             ipfs_cid=resolved.cid,
             kubo_cas=self._kubo_cas,
-            zarr_group=zarr_group,
+            zarr_group=selected_group,
             shard_read_mode=shard_read_mode,
         )
 
@@ -478,7 +561,25 @@ class dClimateClient:
                 else None
             ),
         }
+        if resolved.versions_api is not None:
+            metadata["versions_api"] = resolved.versions_api
+        if resolved.provenance_api is not None:
+            metadata["provenance_api"] = resolved.provenance_api
+        if resolved.citation_api is not None:
+            metadata["citation_api"] = resolved.citation_api
+        if resolved.stream_id is not None:
+            metadata["stream_id"] = resolved.stream_id
+        if resolved.commit_id is not None:
+            metadata["commit_id"] = resolved.commit_id
+        if resolved.version_label is not None:
+            metadata["version_label"] = resolved.version_label
+        if resolved.is_citable is not None:
+            metadata["is_citable"] = resolved.is_citable
+        if resolved.retention_class is not None:
+            metadata["retention_class"] = resolved.retention_class
         self._apply_zarr_group_metadata(ds, metadata)
+        if selected_resolution is not None:
+            metadata["resolution"] = selected_resolution
 
         if return_xarray:
             return ds, metadata
@@ -616,6 +717,136 @@ class dClimateClient:
                     )
 
         return await asyncio.to_thread(list_available_datasets, self._stac_catalog)
+
+    async def _resolve_dataset_details(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str],
+        organization: typing.Optional[str],
+    ) -> ResolvedDatasetDetails:
+        """Resolve release metadata through the hosted STAC API or IPFS fallback."""
+        resolved_collection = collection
+        if organization and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
+
+        if self._stac_server_url:
+            try:
+                if self._kubo_cas is None:
+                    async with httpx.AsyncClient(
+                        timeout=30, follow_redirects=False
+                    ) as client:
+                        return await aresolve_dataset_from_stac_server(
+                            collection=resolved_collection,
+                            dataset=dataset,
+                            variant=variant,
+                            server_url=self._stac_server_url,
+                            client=client,
+                        )
+                return await aresolve_dataset_from_stac_server(
+                    collection=resolved_collection,
+                    dataset=dataset,
+                    variant=variant,
+                    server_url=self._stac_server_url,
+                    client=self._get_stac_http_client(),
+                )
+            except (httpx.HTTPError, ValueError):
+                pass
+
+        from .stac_catalog import (
+            list_available_datasets,
+            load_stac_catalog,
+            resolve_dataset_from_stac,
+        )
+
+        if self._stac_catalog is None:
+            async with self._stac_catalog_lock:
+                if self._stac_catalog is None:
+                    self._stac_catalog = await asyncio.to_thread(
+                        load_stac_catalog,
+                        gateway_url=self._catalog_gateway_base_url,
+                        headers=self._headers,
+                        auth=self._auth,
+                    )
+
+        if not organization and resolved_collection:
+            available = await asyncio.to_thread(
+                list_available_datasets, self._stac_catalog
+            )
+            if resolved_collection not in available:
+                prefixed_matches = [
+                    coll_id
+                    for coll_id in available
+                    if coll_id.endswith(f"_{resolved_collection}")
+                ]
+                if len(prefixed_matches) == 1:
+                    resolved_collection = prefixed_matches[0]
+
+        return await asyncio.to_thread(
+            resolve_dataset_from_stac,
+            catalog=self._stac_catalog,
+            collection=resolved_collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+
+    async def list_dataset_versions(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+        *,
+        anchored: typing.Optional[bool] = None,
+        is_citable: typing.Optional[bool] = None,
+        version_label: typing.Optional[str] = None,
+    ) -> DatasetVersionListing:
+        """List releases using the version-service URL advertised by STAC."""
+        details = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+        if not details.versions_api:
+            raise ValueError(
+                "Version history is not available for "
+                f"{collection}/{dataset}/{details.variant}"
+            )
+        return await asyncio.to_thread(
+            list_versions_from_url,
+            details.versions_api,
+            anchored=anchored,
+            is_citable=is_citable,
+            version_label=version_label,
+        )
+
+    async def get_dataset_version(
+        self,
+        collection: str,
+        dataset: str,
+        commit_id: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+    ) -> DatasetVersion:
+        """Resolve one exact release through the version URL advertised by STAC."""
+        details = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+        if not details.versions_api:
+            raise ValueError(
+                "Version history is not available for "
+                f"{collection}/{dataset}/{details.variant}"
+            )
+        return await asyncio.to_thread(
+            get_exact_version_from_url,
+            details.versions_api,
+            commit_id,
+        )
 
     # ------------------------------------------------------------------
     # Siren REST API methods

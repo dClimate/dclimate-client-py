@@ -40,6 +40,7 @@ except ModuleNotFoundError as exc:
 
 from .dclimate_zarr_errors import (
     IpfsConnectionError,
+    MultiresolutionSelectionRequiredError,
 )
 
 # Configure logging
@@ -174,23 +175,20 @@ def _normalize_zarr_group(zarr_group: str | None) -> str | None:
     return normalized or None
 
 
-def _zarr_group_candidates(store: Any) -> list[str]:
-    """Return safe default Zarr groups from py-hamt v2 stores."""
+def _available_zarr_groups(store: Any) -> tuple[str, ...]:
+    """Return the Zarr groups reported by a py-hamt v2 store."""
     groups_getter = getattr(store, "_v2_top_level_groups", None)
     if not callable(groups_getter):
-        return []
+        return ()
 
     try:
         groups = groups_getter()
     except Exception:
-        return []
+        return ()
 
-    normalized_groups = sorted(
-        group.strip("/") for group in groups if isinstance(group, str) and group
+    return tuple(
+        sorted(group.strip("/") for group in groups if isinstance(group, str) and group)
     )
-    if "0" not in normalized_groups:
-        return []
-    return ["0"]
 
 
 def _store_requires_explicit_zarr_group(store: Any) -> bool:
@@ -216,7 +214,7 @@ def _open_zarr_from_store(
     *,
     zarr_group: str | None = None,
 ) -> tuple[xr.Dataset, str | None]:
-    """Open a Zarr store, choosing a default group for py-hamt v2 pyramids."""
+    """Open a Zarr store without silently selecting a pyramid resolution."""
     normalized_group = _normalize_zarr_group(zarr_group)
     if normalized_group is not None:
         return (
@@ -225,23 +223,24 @@ def _open_zarr_from_store(
         )
 
     if _store_requires_explicit_zarr_group(store):
-        for candidate_group in _zarr_group_candidates(store):
-            return (
-                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
-                candidate_group,
-            )
+        groups = _available_zarr_groups(store)
+        raise MultiresolutionSelectionRequiredError(
+            "This Zarr store has multiple groups; pass zarr_group explicitly."
+            + (f" Available groups: {', '.join(groups)}." if groups else ""),
+            available_groups=groups,
+        )
 
     try:
         return xr.open_zarr(store=store, decode_timedelta=True), None
     except ValueError as exc:
         if not _is_explicit_zarr_group_error(exc):
             raise
-        for candidate_group in _zarr_group_candidates(store):
-            return (
-                xr.open_zarr(store=store, group=candidate_group, decode_timedelta=True),
-                candidate_group,
-            )
-        raise
+        groups = _available_zarr_groups(store)
+        raise MultiresolutionSelectionRequiredError(
+            "This Zarr store requires an explicit zarr_group."
+            + (f" Available groups: {', '.join(groups)}." if groups else ""),
+            available_groups=groups,
+        ) from exc
 
 
 async def _open_sharded_zarr_store(
@@ -457,8 +456,8 @@ async def _load_dataset_from_ipfs_cid(
             dataset_status = "connection_error"
             _record_span_error(dataset_span, exc)
             raise
-        except ValueError as exc:
-            # Re-raise ValueError as-is
+        except (ValueError, MultiresolutionSelectionRequiredError) as exc:
+            # Preserve selection and Zarr value errors as-is.
             _record_span_error(dataset_span, exc)
             raise
         except Exception as e:

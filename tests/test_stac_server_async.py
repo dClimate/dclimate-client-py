@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
 import xarray as xr
 
 from dclimate_client_py import dclimate_client, stac_server
-from dclimate_client_py.stac_server import ResolvedDataset
+from dclimate_client_py.stac_server import (
+    ResolvedDataset,
+    ResolvedDatasetDetails,
+    ZarrResolution,
+)
 
 
 COLLECTION = "example_collection"
@@ -323,16 +327,126 @@ async def test_async_resolver_matches_sync_selection_rules() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_details_resolver_preserves_resolution_choices() -> None:
+    feature = _feature(DATASET, "default", "bafy-pyramid")
+    feature["assets"] = {
+        "data": {"href": "ipfs://bafy-pyramid"},
+        "data-500m": {
+            "href": "ipfs://bafy-pyramid",
+            "dclimate:zarr_group": "0",
+            "dclimate:spatial_resolution": "500m",
+        },
+        "data-2km": {
+            "href": "ipfs://bafy-pyramid",
+            "dclimate:zarr_group": "1",
+            "dclimate:spatial_resolution": "2km",
+        },
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"features": [feature]}, request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resolved = await stac_server.aresolve_dataset_from_stac_server(
+            collection=COLLECTION,
+            dataset=DATASET,
+            server_url="https://stac.example",
+            client=client,
+        )
+
+    assert resolved.cid == "bafy-pyramid"
+    assert resolved.zarr_resolutions == (
+        ZarrResolution("data-500m", "500m", "0"),
+        ZarrResolution("data-2km", "2km", "1"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_resolution_closes_temporary_client_outside_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary_client = AsyncMock(spec=httpx.AsyncClient)
+    temporary_client.__aenter__.return_value = temporary_client
+    client_factory = Mock(return_value=temporary_client)
+    resolver = AsyncMock(
+        return_value=ResolvedDatasetDetails(
+            cid="bafy-versioned",
+            variant="default",
+            versions_api="https://versions.test/datasets/example/versions",
+        )
+    )
+
+    monkeypatch.setattr(dclimate_client.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(dclimate_client, "aresolve_dataset_from_stac_server", resolver)
+    client = dclimate_client.dClimateClient(stac_server_url="https://stac.example")
+
+    details = await client._resolve_dataset_details(
+        collection=COLLECTION,
+        dataset=DATASET,
+        variant="default",
+        organization=None,
+    )
+
+    assert details.cid == "bafy-versioned"
+    resolver.assert_awaited_once_with(
+        collection=COLLECTION,
+        dataset=DATASET,
+        variant="default",
+        server_url="https://stac.example",
+        client=temporary_client,
+    )
+    temporary_client.__aenter__.assert_awaited_once()
+    temporary_client.__aexit__.assert_awaited_once()
+    assert client._stac_http_client is None
+
+
+@pytest.mark.asyncio
+async def test_version_resolution_reuses_context_owned_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pooled_client = AsyncMock(spec=httpx.AsyncClient)
+    pooled_client.is_closed = False
+    resolver = AsyncMock(
+        return_value=ResolvedDatasetDetails(cid="bafy-versioned", variant="default")
+    )
+    client_factory = Mock(side_effect=AssertionError("temporary client created"))
+
+    monkeypatch.setattr(dclimate_client.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(dclimate_client, "aresolve_dataset_from_stac_server", resolver)
+    client = dclimate_client.dClimateClient(stac_server_url="https://stac.example")
+    client._kubo_cas = object()
+    client._stac_http_client = pooled_client
+
+    await client._resolve_dataset_details(
+        collection=COLLECTION,
+        dataset=DATASET,
+        variant="default",
+        organization=None,
+    )
+
+    resolver.assert_awaited_once_with(
+        collection=COLLECTION,
+        dataset=DATASET,
+        variant="default",
+        server_url="https://stac.example",
+        client=pooled_client,
+    )
+    client_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_high_level_client_uses_native_async_resolver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    resolver = AsyncMock(return_value=ResolvedDataset("bafy-native", "default"))
+    resolver = AsyncMock(
+        return_value=ResolvedDatasetDetails(cid="bafy-native", variant="default")
+    )
 
     async def load_from_ipfs(**kwargs):  # type: ignore[no-untyped-def]
         assert kwargs["ipfs_cid"] == "bafy-native"
         return xr.Dataset({"temperature": ("time", [21.0])}, coords={"time": [0]})
 
-    monkeypatch.setattr(dclimate_client, "aresolve_cid_from_stac_server", resolver)
+    monkeypatch.setattr(dclimate_client, "aresolve_dataset_from_stac_server", resolver)
     monkeypatch.setattr(dclimate_client, "_load_dataset_from_ipfs_cid", load_from_ipfs)
     client = dclimate_client.dClimateClient(stac_server_url="https://stac.example")
     client._kubo_cas = object()
