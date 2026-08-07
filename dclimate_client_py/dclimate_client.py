@@ -561,6 +561,22 @@ class dClimateClient:
                 else None
             ),
         }
+        if resolved.versions_api is not None:
+            metadata["versions_api"] = resolved.versions_api
+        if resolved.provenance_api is not None:
+            metadata["provenance_api"] = resolved.provenance_api
+        if resolved.citation_api is not None:
+            metadata["citation_api"] = resolved.citation_api
+        if resolved.stream_id is not None:
+            metadata["stream_id"] = resolved.stream_id
+        if resolved.commit_id is not None:
+            metadata["commit_id"] = resolved.commit_id
+        if resolved.version_label is not None:
+            metadata["version_label"] = resolved.version_label
+        if resolved.is_citable is not None:
+            metadata["is_citable"] = resolved.is_citable
+        if resolved.retention_class is not None:
+            metadata["retention_class"] = resolved.retention_class
         self._apply_zarr_group_metadata(ds, metadata)
         if selected_resolution is not None:
             metadata["resolution"] = selected_resolution
@@ -716,6 +732,17 @@ class dClimateClient:
 
         if self._stac_server_url:
             try:
+                if self._kubo_cas is None:
+                    async with httpx.AsyncClient(
+                        timeout=30, follow_redirects=False
+                    ) as client:
+                        return await aresolve_dataset_from_stac_server(
+                            collection=resolved_collection,
+                            dataset=dataset,
+                            variant=variant,
+                            server_url=self._stac_server_url,
+                            client=client,
+                        )
                 return await aresolve_dataset_from_stac_server(
                     collection=resolved_collection,
                     dataset=dataset,

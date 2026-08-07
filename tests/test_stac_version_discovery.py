@@ -76,6 +76,7 @@ def test_stac_server_treats_named_assets_as_three_resolution_choices(
         }
         for resolution, group in (("500m", "0"), ("2km", "1"), ("8km", "2"))
     }
+    assets["data-500m-alias"] = dict(assets["data-500m"])
     if include_alias:
         assets["data"] = {
             **assets["data-500m"],
@@ -137,6 +138,9 @@ def test_ipfs_stac_details_preserve_discovered_tritium_url():
     data_asset.extra_fields["dclimate:zarr_group"] = "0"
     data_asset.extra_fields["dclimate:spatial_resolution"] = "500m"
     item.add_asset("data-500m", data_asset)
+    duplicate_asset = pystac.Asset(href="ipfs://bafy-era5")
+    duplicate_asset.extra_fields.update(data_asset.extra_fields)
+    item.add_asset("data-500m-alias", duplicate_asset)
     collection.add_item(item)
     collection_link = organization.add_child(collection)
     collection_link.extra_fields["dclimate:id"] = "ecmwf_era5"
@@ -170,6 +174,14 @@ async def test_client_requires_explicit_resolution_or_group(
     details = stac_server.ResolvedDatasetDetails(
         cid="bafy-grouped",
         variant="default",
+        versions_api="https://versions.test/datasets/pyramid/versions",
+        provenance_api="https://versions.test/datasets/pyramid/provenance",
+        citation_api="https://versions.test/datasets/pyramid/citation",
+        stream_id="stream-1",
+        commit_id="commit-1",
+        version_label="2026-08",
+        is_citable=False,
+        retention_class="permanent",
         zarr_resolutions=(
             stac_server.ZarrResolution("data-500m", "500m", "0"),
             stac_server.ZarrResolution("data-2km", "2km", "2"),
@@ -212,6 +224,14 @@ async def test_client_requires_explicit_resolution_or_group(
     assert observed_groups == [expected_group]
     assert metadata["zarr_group"] == expected_group
     assert metadata["resolution"] == (resolution or "2km")
+    assert metadata["versions_api"] == details.versions_api
+    assert metadata["provenance_api"] == details.provenance_api
+    assert metadata["citation_api"] == details.citation_api
+    assert metadata["stream_id"] == "stream-1"
+    assert metadata["commit_id"] == "commit-1"
+    assert metadata["version_label"] == "2026-08"
+    assert metadata["is_citable"] is False
+    assert metadata["retention_class"] == "permanent"
 
 
 @pytest.mark.asyncio

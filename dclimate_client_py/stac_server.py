@@ -80,6 +80,20 @@ class ZarrResolution:
     group: str
 
 
+def _dedupe_zarr_resolutions(
+    resolutions: Iterable[ZarrResolution],
+) -> tuple[ZarrResolution, ...]:
+    """Deduplicate equivalent resolution/group mappings, preserving asset order."""
+    seen: set[tuple[str, str]] = set()
+    unique: list[ZarrResolution] = []
+    for choice in resolutions:
+        key = (choice.resolution, choice.group)
+        if key not in seen:
+            seen.add(key)
+            unique.append(choice)
+    return tuple(unique)
+
+
 @dataclass(frozen=True)
 class ResolvedDatasetDetails:
     """Dataset location and optional release services advertised by STAC."""
@@ -489,7 +503,7 @@ def _resolve_dataset_from_features(
     properties = item.get("properties") or {}
     assets = item.get("assets", {})
     data_asset = assets.get("data", {})
-    zarr_resolutions = tuple(
+    zarr_resolutions = _dedupe_zarr_resolutions(
         ZarrResolution(
             asset_key=asset_key,
             resolution=asset["dclimate:spatial_resolution"],

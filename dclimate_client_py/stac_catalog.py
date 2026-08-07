@@ -20,6 +20,7 @@ from .stac_server import (
     ResolvedDataset,
     ResolvedDatasetDetails,
     ZarrResolution,
+    _dedupe_zarr_resolutions,
     _dataset_and_variant_from_item_id,
     _dataset_and_variant_from_known_datasets,
 )
@@ -302,7 +303,7 @@ def resolve_dataset_from_stac(
     """
     Resolve a dataset to its IPFS CID by querying the STAC catalog.
 
-    Changed in 0.6: returns ResolvedDataset.
+    Changed in 0.6: returns ResolvedDatasetDetails.
 
     This function navigates the STAC catalog structure to find the specific dataset variant
     and extracts the Zarr data CID from the STAC Item's assets.
@@ -460,7 +461,7 @@ def resolve_dataset_from_stac(
 
     assert selected_variant is not None
     properties = selected_item.properties or {}
-    zarr_resolutions = tuple(
+    zarr_resolutions = _dedupe_zarr_resolutions(
         ZarrResolution(
             asset_key=asset_key,
             resolution=asset.extra_fields["dclimate:spatial_resolution"],
