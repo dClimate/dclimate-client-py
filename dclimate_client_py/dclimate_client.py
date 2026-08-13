@@ -40,6 +40,7 @@ from .ceramic_api import (
     list_versions_from_url,
 )
 from .siren import SirenClient
+from .stations import StationsClient
 from .siren.types import (
     SirenMetricDataPoint,
     SirenMetricQuery,
@@ -170,6 +171,10 @@ class dClimateClient:
         if siren is not None:
             self._siren_client = SirenClient(siren)
 
+        # Station datasets. Unlike Siren this needs no configuration, so it is
+        # built on first access rather than here -- see the `stations` property.
+        self._stations_client: typing.Optional["StationsClient"] = None
+
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
         # Create KuboCAS with configured endpoints
@@ -214,6 +219,12 @@ class dClimateClient:
         try:
             if self._siren_client is not None:
                 await self._siren_client.aclose()
+        except BaseException as error:
+            cleanup_error = _merge_cleanup_error(cleanup_error, error)
+
+        try:
+            if self._stations_client is not None:
+                await self._stations_client.aclose()
         except BaseException as error:
             cleanup_error = _merge_cleanup_error(cleanup_error, error)
 
@@ -847,6 +858,34 @@ class dClimateClient:
             details.versions_api,
             commit_id,
         )
+
+    # ------------------------------------------------------------------
+    # Station (point-observation) datasets
+    # ------------------------------------------------------------------
+
+    @property
+    def stations(self) -> StationsClient:
+        """Station datasets, e.g. ``await client.stations.load(cid)``.
+
+        Unlike :attr:`siren`, this needs no configuration -- it reads over the
+        transport the client already has, so requiring an option would be
+        ceremony with nothing behind it.
+
+        Reads prefer the client's own ``KuboCAS`` when the client is open, so
+        pinning, retries, and configured endpoints apply to station reads too.
+        Outside the async context there is no ``KuboCAS`` yet, so this falls back
+        to the plain HTTP gateway -- which is why the instance is rebuilt if it
+        was first created before ``__aenter__``.
+        """
+        cas = self._kubo_cas
+        if self._stations_client is None or (
+            cas is not None and self._stations_client._cas is not cas
+        ):
+            self._stations_client = StationsClient(
+                gateway_url=self._catalog_gateway_base_url,
+                cas=cas,
+            )
+        return self._stations_client
 
     # ------------------------------------------------------------------
     # Siren REST API methods

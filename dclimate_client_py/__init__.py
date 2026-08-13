@@ -35,11 +35,17 @@ from .siren import (
 )
 from .dclimate_zarr_errors import (
     ConflictingResolutionSelectionError,
+    DatasetCorruptError,
+    DatasetNotFoundError,
+    InvalidSelectionError,
+    NoDataFoundError,
     MultiresolutionSelectionRequiredError,
     ResolutionNotAvailableError,
     SirenApiError,
+    TabularNotInstalledError,
     X402PaymentError,
     X402NotInstalledError,
+    ZarrClientError,
 )
 
 _LAZY_IMPORTS = {
@@ -48,6 +54,8 @@ _LAZY_IMPORTS = {
     "dClimateClient": (".dclimate_client", "dClimateClient"),
     "GeotemporalData": (".geotemporal_data", "GeotemporalData"),
     "load_stac_catalog": (".stac_catalog", "load_stac_catalog"),
+    "StationsClient": (".stations", "StationsClient"),
+    "WrappedStationDataset": (".stations", "WrappedStationDataset"),
     "list_available_datasets": (".stac_catalog", "list_available_datasets"),
 }
 
@@ -88,6 +96,11 @@ __all__ = [
     "resolve_cid_from_stac_server",
     "list_available_datasets_from_stac_server",
     "STAC_SERVER_URL",
+    "ZarrClientError",
+    "DatasetCorruptError",
+    "DatasetNotFoundError",
+    "InvalidSelectionError",
+    "NoDataFoundError",
     "MultiresolutionSelectionRequiredError",
     "ResolutionNotAvailableError",
     "ConflictingResolutionSelectionError",
@@ -105,4 +118,8 @@ __all__ = [
     "SirenApiError",
     "X402PaymentError",
     "X402NotInstalledError",
+    # Stations
+    "StationsClient",
+    "WrappedStationDataset",
+    "TabularNotInstalledError",
 ]

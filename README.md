@@ -227,6 +227,97 @@ Callers loading a direct CID have no STAC resolution mapping and must pass
 generator's `metadataGroup` is internal catalog-generation configuration and
 does not influence client selection.
 
+## Station data usage
+
+Gridded Zarr datasets come from `load_dataset`. Point-observation **station**
+datasets (GHCND and friends) live under `client.stations`, and read the same way:
+degrees, ISO timestamps, chained selections.
+
+Station support needs [`tabular-py`](https://github.com/dClimate/tabular-py),
+which is not on PyPI yet, so it is not installed by default:
+
+``` shell
+uv pip install git+https://github.com/dClimate/tabular-py
+```
+
+Until it is installed, `client.stations` raises `TabularNotInstalledError` with
+those instructions. Once `tabular-py` is published it moves into the ordinary
+dependency list, matching `dclimate-client-js`.
+
+```python
+async with dClimateClient() as client:
+    stations = await client.stations.load("bafyr4i...")
+
+    # Every station, with position and coverage window.
+    for s in await stations.list_stations():
+        print(s.station_id, s.latitude, s.longitude, s.start, s.end)
+
+    # Stations within 50 km of a point, over one week.
+    records = await (
+        stations
+        .circle(40.75, -73.99, 50)
+        .time_range("2023-01-01", "2023-01-07")
+        .to_records("TMAX")
+    )
+```
+
+Reads go through the client's own IPFS transport, so pinning, retries, and
+configured endpoints apply to station reads too. Resolution is by CID for now;
+STAC catalog support will follow.
+
+Selections return new instances, so a partial selection can be branched:
+
+```python
+week = stations.time_range("2023-01-01", "2023-01-07")
+nyc = await week.select("USW00094728").rows()
+lax = await week.select("USW00023174").rows()
+```
+
+Two things differ from `GeotemporalData`, because the data model differs:
+
+- **`nearest(lat, lon, max_km=...)` instead of a point selection.** A grid always
+  has a cell under any coordinate; stations are irregular, so the nearest one may
+  be far away. Pass `max_km` to make that a hard bound rather than a surprise.
+- **`where(...)` has no gridded counterpart.** Row-level predicates are pushed
+  down to fragment statistics, so most fragments are skipped without being read:
+
+```python
+from tabular_py import gt
+
+# `nearest` reads the station index to find the match, so it is awaited --
+# unlike the synchronous selections above.
+hot_days = await (
+    (await stations.nearest(29.98, -95.36))
+    .time_range("2025-01-01", "2025-12-31")
+    .where(gt("TMAX", 350))  # tenths of °C, so 35 °C
+    .rows()
+)
+```
+
+`nearest` alone means the nearest *station*, which is not always the nearest
+*usable data*: near downtown Los Angeles the closest station is 0.63 km away and
+has never recorded `TMAX`, while the closest that has is 5.4 km away. Ask for the
+columns you need, and narrow them to a time range when "has ever reported" is not
+good enough:
+
+```python
+# Resolves the dataset and the station in one call.
+station = await client.stations.nearest(
+    "bafyr4i...",
+    34.0522, -118.2437,
+    columns=["TMAX"],
+    within=("2024-01-01", "2024-12-31"),
+    max_km=50,
+)
+print(station.station_id, station.km)
+```
+
+Station failures arrive as this library's own errors, for the whole chain rather
+than just `load`: an unknown column is an `InvalidSelectionError`, a well-formed
+query that matched nothing is a `NoDataFoundError`, and bytes that do not
+describe a readable dataset are a `DatasetCorruptError`. All descend from
+`ZarrClientError`, so one `except` still covers the client.
+
 ## Siren API usage
 
 The Python client also exposes a Siren REST client for metrics and regions.
