@@ -29,16 +29,6 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    # NOTE: station data (`client.stations`) needs `tabular-py`, which is not on
-    # PyPI yet. It is deliberately *not* declared here or as an extra: uv
-    # resolves every extra when locking, so naming an unpublished package makes
-    # even `uv sync` fail for people who never touch station data. Install it
-    # alongside for now --
-    #     uv pip install git+https://github.com/dClimate/tabular-py
-    # -- and move it into this list once it is published, matching
-    # dclimate-client-js, which depends on @dclimate/tabular unconditionally.
-    # `client.stations` raises TabularNotInstalledError with these instructions
-    # until then.
     "aiobotocore>=2.13.0",
     "aiohttp>=3.9.0",
     "xarray>=2025.3.0",
@@ -49,6 +39,12 @@ dependencies = [
     "numcodecs[crc32c]>=0.14,<0.16",
     "numpy>=2.1.3",
     "py_hamt>=3.6.0",
+    # Station (point-observation) datasets, behind `client.stations`. Imported
+    # as `tabular_py`; the distribution is namespaced because PyPI normalises
+    # "tabular-py" onto the unrelated existing "tabularpy" project. Declared
+    # unconditionally, matching dclimate-client-js's dependency on
+    # @dclimate/tabular.
+    "dclimate-tabular-py>=0.1.0",
     "multiformats>=0.3.1",
     "geopandas>=1.0.0",
     "pandas>=2.2.0",

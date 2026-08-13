@@ -26,7 +26,7 @@ from dclimate_client_py.stations import StationsClient
 
 tabular_py = pytest.importorskip(
     "tabular_py",
-    reason="station support needs tabular-py, which is not on PyPI yet",
+    reason="station support needs the dclimate-tabular-py distribution",
 )
 
 from tabular_py.errors import (  # noqa: E402
@@ -283,8 +283,8 @@ class TestWrapStationDataset:
                 await dataset.rows()
 
 
-class TestOptionalDependency:
-    def test_absence_is_reported_with_install_guidance(self, monkeypatch) -> None:
+class TestMissingDependency:
+    def test_absence_names_the_distribution_not_the_module(self, monkeypatch) -> None:
         import builtins
 
         from dclimate_client_py.stations import stations_client
@@ -297,5 +297,8 @@ class TestOptionalDependency:
             return real_import(name, *args, **kwargs)
 
         monkeypatch.setattr(builtins, "__import__", missing)
-        with pytest.raises(TabularNotInstalledError, match="tabular-py"):
+        # The whole point of catching this: the import name and the distribution
+        # name differ, so the stock ModuleNotFoundError names `tabular_py`, which
+        # `pip install` cannot find. The message has to name the installable one.
+        with pytest.raises(TabularNotInstalledError, match="dclimate-tabular-py"):
             stations_client._require_tabular()

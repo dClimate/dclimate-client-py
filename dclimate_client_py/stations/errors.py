@@ -40,7 +40,8 @@ def translate_station_error(cause: BaseException) -> NoReturn:
     the station, column, or distance that actually failed.
     """
     # Imported here, not at module scope, so that importing this module -- which
-    # the package's error exports do -- does not require the optional dependency.
+    # the package's error exports do -- does not pull in tabular_py and, through
+    # it, pyarrow, on every `import dclimate_client_py`.
     from tabular_py.errors import (
         DatasetIntegrityError,
         DatasetReaderError,

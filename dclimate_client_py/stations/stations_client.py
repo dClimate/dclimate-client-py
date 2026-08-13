@@ -33,18 +33,22 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
 
 def _require_tabular() -> typing.Any:
-    """Import ``tabular_py``, or explain how to install it.
+    """Import ``tabular_py``, or say plainly that it is missing.
 
-    Optional only because ``tabular-py`` is not on PyPI yet; the JS client
-    depends on ``@dclimate/tabular`` unconditionally.
+    An ordinary dependency, so this should never fire in a correctly installed
+    environment. It exists because the import name and the distribution name
+    differ -- ``tabular_py`` from ``dclimate-tabular-py`` -- which makes the
+    stock ``ModuleNotFoundError`` name a package that ``pip install`` cannot
+    find.
     """
     try:
         import tabular_py
     except ImportError as cause:
         raise TabularNotInstalledError(
-            "Station data requires tabular-py, which is not on PyPI yet. "
-            "Install it with:\n"
-            "  uv pip install git+https://github.com/dClimate/tabular-py"
+            "Station data requires the `tabular_py` module, which ships in the "
+            "`dclimate-tabular-py` distribution. Reinstall this package, or "
+            "install it directly with:\n"
+            "  uv pip install dclimate-tabular-py"
         ) from cause
     return tabular_py
 

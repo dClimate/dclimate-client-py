@@ -1,8 +1,9 @@
-"""Station (point-observation) dataset support, built on ``tabular-py``.
+"""Station (point-observation) dataset support, built on ``tabular_py``.
 
-Everything here imports without ``tabular_py`` installed; the dependency is only
-required once a dataset is actually loaded, which is what lets the rest of the
-library import cleanly when the optional extra is absent.
+``tabular_py`` is imported lazily, at load time rather than here. It is an
+ordinary dependency, so it should always be present; deferring the import keeps
+importing this library cheap, and keeps a broken or partial install from taking
+down every other namespace along with station support.
 """
 
 from .errors import translate_station_error

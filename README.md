@@ -233,16 +233,11 @@ Gridded Zarr datasets come from `load_dataset`. Point-observation **station**
 datasets (GHCND and friends) live under `client.stations`, and read the same way:
 degrees, ISO timestamps, chained selections.
 
-Station support needs [`tabular-py`](https://github.com/dClimate/tabular-py),
-which is not on PyPI yet, so it is not installed by default:
-
-``` shell
-uv pip install git+https://github.com/dClimate/tabular-py
-```
-
-Until it is installed, `client.stations` raises `TabularNotInstalledError` with
-those instructions. Once `tabular-py` is published it moves into the ordinary
-dependency list, matching `dclimate-client-js`.
+Station support is built on
+[`tabular-py`](https://github.com/dClimate/tabular-py), which installs
+automatically as a dependency. It is imported as `tabular_py` but distributed as
+`dclimate-tabular-py`, because PyPI normalises the name `tabular-py` onto an
+unrelated existing project.
 
 ```python
 async with dClimateClient() as client:
