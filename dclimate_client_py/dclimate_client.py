@@ -227,6 +227,13 @@ class dClimateClient:
                 await self._stations_client.aclose()
         except BaseException as error:
             cleanup_error = _merge_cleanup_error(cleanup_error, error)
+        finally:
+            # Dropped, not just closed. It holds the `KuboCAS` closed below, and
+            # a closed `KuboCAS` never reopens -- so keeping this instance would
+            # make station reads after the context fail on a dead transport
+            # instead of falling back to the gateway, which is what the
+            # `stations` property promises outside the context.
+            self._stations_client = None
 
         try:
             if self._kubo_cas is not None:
@@ -878,14 +885,19 @@ class dClimateClient:
         was first created before ``__aenter__``.
         """
         cas = self._kubo_cas
-        if self._stations_client is None or (
-            cas is not None and self._stations_client._cas is not cas
-        ):
-            self._stations_client = StationsClient(
+        current = self._stations_client
+        if current is None or current._cas is not cas:
+            replacement = StationsClient(
                 gateway_url=self._catalog_gateway_base_url,
                 cas=cas,
             )
-        return self._stations_client
+            if current is not None:
+                # The replacement inherits any gateway sources the old instance
+                # opened. It is the only one `__aexit__` closes, so without this
+                # those connection pools would leak.
+                replacement._adopt_sources_from(current)
+            current = self._stations_client = replacement
+        return current
 
     # ------------------------------------------------------------------
     # Siren REST API methods

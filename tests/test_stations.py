@@ -126,6 +126,88 @@ class TestClientNamespace:
         assert isinstance(source, tabular_py.GatewayRangeSource)
 
 
+class FakeCas:
+    """Stands in for a ``KuboCAS`` the client owns and closes on exit."""
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+
+class TestNamespaceLifecycle:
+    """Who owns which transport, and when it stops being usable."""
+
+    async def test_a_closed_context_does_not_leave_a_dead_transport_cached(
+        self,
+    ) -> None:
+        # A KuboCAS never reopens once closed. Keeping the instance built around
+        # one would make station reads after the context fail on a dead
+        # transport, instead of falling back to the gateway as documented.
+        client = dClimateClient()
+        client._kubo_cas = FakeCas()  # type: ignore[assignment]
+        during = client.stations
+        assert during._cas is client._kubo_cas
+
+        await client.__aexit__(None, None, None)
+
+        assert client._stations_client is None
+        after = client.stations
+        assert after is not during
+        assert after._cas is None
+
+    async def test_rebuilding_onto_the_cas_does_not_strand_gateway_sources(
+        self,
+    ) -> None:
+        # Station data loaded before __aenter__ opens a gateway source. The
+        # rebuilt instance is the only one __aexit__ closes, so the old one's
+        # sources have to come with it or their pools leak.
+        closed: list[object] = []
+
+        class Source:
+            async def aclose(self) -> None:
+                closed.append(self)
+
+        client = dClimateClient()
+        before = client.stations
+        source = Source()
+        before._owned_sources.append(source)
+
+        client._kubo_cas = FakeCas()  # type: ignore[assignment]
+        after = client.stations
+        assert after is not before
+        assert before._owned_sources == []
+        assert after._owned_sources == [source]
+
+        await client.__aexit__(None, None, None)
+        assert closed == [source]
+
+    async def test_one_failing_source_does_not_strand_the_others(self) -> None:
+        # The list is cleared up front, so a source skipped here is never
+        # retried by anything.
+        closed: list[str] = []
+
+        class Source:
+            def __init__(self, name: str, fails: bool = False) -> None:
+                self.name = name
+                self.fails = fails
+
+            async def aclose(self) -> None:
+                if self.fails:
+                    raise RuntimeError(f"{self.name} refused to close")
+                closed.append(self.name)
+
+        stations = StationsClient(gateway_url="https://unused.example")
+        stations._owned_sources.extend(
+            [Source("first"), Source("second", fails=True), Source("third")]
+        )
+
+        with pytest.raises(RuntimeError, match="second refused to close"):
+            await stations.aclose()
+
+        # The failure is reported, but not at the cost of the healthy pools.
+        assert closed == ["first", "third"]
+        assert stations._owned_sources == []
+
+
 class TestTranslateStationError:
     """The mapping, by who has to act."""
 

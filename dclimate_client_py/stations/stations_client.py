@@ -71,6 +71,18 @@ class StationsClient:
         self._cas = cas
         self._owned_sources: list[typing.Any] = []
 
+    def _adopt_sources_from(self, other: StationsClient) -> None:
+        """Take over another instance's open sources, so they still get closed.
+
+        Used when the parent client rebuilds this namespace onto a different
+        transport. Building the replacement happens in a property, which cannot
+        await, so the sources the old instance opened move here rather than
+        being closed on the spot -- otherwise they would leak, since the
+        replacement is the only instance the parent client still closes.
+        """
+        self._owned_sources.extend(other._owned_sources)
+        other._owned_sources = []
+
     def _source(self, gateway_url: str | None) -> typing.Any:
         tabular = _require_tabular()
         # A per-request gateway override means a dedicated source; otherwise
@@ -170,7 +182,19 @@ class StationsClient:
 
         A borrowed ``KuboCAS`` is the parent client's to close, so it is left
         alone; only sources created here are owned here.
+
+        Every source is closed even if one of them fails, because they hold
+        separate connection pools: stopping at the first failure would strand
+        the rest, and the list is cleared up front, so nothing would ever retry
+        them. The first failure is re-raised once the rest are shut.
         """
         sources, self._owned_sources = self._owned_sources, []
+        failure: BaseException | None = None
         for source in sources:
-            await source.aclose()
+            try:
+                await source.aclose()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+        if failure is not None:
+            raise failure
