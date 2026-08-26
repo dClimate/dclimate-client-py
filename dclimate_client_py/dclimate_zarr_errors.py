@@ -127,4 +127,4 @@ class X402NotInstalledError(ZarrClientError):
 
 
 class TabularNotInstalledError(ZarrClientError):
-    """Raised when station data is requested but tabular-py is not installed"""
+    """Raised when entity data is requested but tabular-py is not installed"""

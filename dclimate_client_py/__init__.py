@@ -54,8 +54,8 @@ _LAZY_IMPORTS = {
     "dClimateClient": (".dclimate_client", "dClimateClient"),
     "GeotemporalData": (".geotemporal_data", "GeotemporalData"),
     "load_stac_catalog": (".stac_catalog", "load_stac_catalog"),
-    "StationsClient": (".stations", "StationsClient"),
-    "WrappedStationDataset": (".stations", "WrappedStationDataset"),
+    "EntitiesClient": (".entities", "EntitiesClient"),
+    "WrappedEntityDataset": (".entities", "WrappedEntityDataset"),
     "list_available_datasets": (".stac_catalog", "list_available_datasets"),
 }
 
@@ -118,8 +118,8 @@ __all__ = [
     "SirenApiError",
     "X402PaymentError",
     "X402NotInstalledError",
-    # Stations
-    "StationsClient",
-    "WrappedStationDataset",
+    # Entities
+    "EntitiesClient",
+    "WrappedEntityDataset",
     "TabularNotInstalledError",
 ]

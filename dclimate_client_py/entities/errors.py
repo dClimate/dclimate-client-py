@@ -1,10 +1,10 @@
 """Translating ``tabular-py`` failures into this library's error types.
 
-Mirrors ``dclimate-client-js`` ``src/stations/errors.ts``.
+Mirrors ``dclimate-client-js`` ``src/entities/errors.ts``.
 
-Station queries are answered by ``tabular_py``, whose errors descend from its own
+Entity queries are answered by ``tabular_py``, whose errors descend from its own
 base class rather than :class:`ZarrClientError`. A caller writing one
-``except ZarrClientError`` around the client would therefore miss every station
+``except ZarrClientError`` around the client would therefore miss every entity
 failure -- so the boundary translates once, here, rather than each method
 wrapping its own body.
 """
@@ -20,8 +20,8 @@ from ..dclimate_zarr_errors import (
 )
 
 
-def translate_station_error(cause: BaseException) -> NoReturn:
-    """Re-raise a station query failure as this library's own error type.
+def translate_entity_error(cause: BaseException) -> NoReturn:
+    """Re-raise an entity query failure as this library's own error type.
 
     The mapping follows the distinction the rest of this library draws, by who
     has to act: a malformed request is an :class:`InvalidSelectionError` (the
@@ -37,7 +37,7 @@ def translate_station_error(cause: BaseException) -> NoReturn:
     dataset.
 
     The original message is preserved verbatim: it is the only part that names
-    the station, column, or distance that actually failed.
+    the entity, column, or distance that actually failed.
     """
     # Imported here, not at module scope, so that importing this module -- which
     # the package's error exports do -- does not pull in tabular_py and, through
@@ -48,10 +48,10 @@ def translate_station_error(cause: BaseException) -> NoReturn:
         DclimateTabularError,
         PredicateError,
         RangeSourceError,
-        StationSelectionError,
+        EntitySelectionError,
     )
 
-    if isinstance(cause, StationSelectionError):
+    if isinstance(cause, EntitySelectionError):
         if cause.reason == "not-found":
             raise NoDataFoundError(str(cause)) from cause
         raise InvalidSelectionError(str(cause)) from cause

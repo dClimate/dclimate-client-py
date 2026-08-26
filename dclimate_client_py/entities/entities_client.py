@@ -1,14 +1,18 @@
-"""Station (point-observation) datasets, as opposed to the gridded Zarr datasets.
+"""Entity (point-observation) datasets, as opposed to the gridded Zarr datasets.
 
-Mirrors ``dclimate-client-js`` ``src/stations/stations-client.ts``.
+Mirrors ``dclimate-client-js`` ``src/entities/entities-client.ts``.
 
-The two are different enough underneath -- irregular stations with per-station
+"Entity" is tabular's word for the thing a row belongs to -- a weather station in
+GHCND, a buoy in NDBC -- and this namespace follows it rather than keeping an
+older ``station`` vocabulary the layer beneath no longer uses.
+
+The two are different enough underneath -- irregular entities with per-entity
 time coverage, versus a regular lat/lon/time grid -- that sharing one loader
 would help nobody. What they do share is how a caller wants to *ask*: degrees,
-ISO timestamps, chained selections. ``StationDataset`` provides that surface, so
+ISO timestamps, chained selections. ``EntityDataset`` provides that surface, so
 this namespace stays thin: resolve a root, hand back the dataset.
 
-Resolution is by CID only for now. There is no STAC equivalent for station data
+Resolution is by CID only for now. There is no STAC equivalent for entity data
 yet; when there is, ``load`` grows a ``collection``/``dataset`` form alongside
 the CID and the rest of this file is unaffected.
 """
@@ -21,15 +25,17 @@ from ..dclimate_zarr_errors import (
     DatasetNotFoundError,
     TabularNotInstalledError,
 )
-from .errors import translate_station_error
-from .wrap import WrappedStationDataset, wrap_station_dataset
+from .errors import translate_entity_error
+from .wrap import WrappedEntityDataset, wrap_entity_dataset
 
 if typing.TYPE_CHECKING:  # pragma: no cover
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from py_hamt import KuboCAS
-    from tabular_py import NearestStation
-    from tabular_py.station_dataset import TimeInput
+    from tabular_py import NearestEntity, TableField
+    from tabular_py.entity_dataset import TimeInput
+
+    ColumnKey = Callable[[TableField], str]
 
 
 def _require_tabular() -> typing.Any:
@@ -45,7 +51,7 @@ def _require_tabular() -> typing.Any:
         import tabular_py
     except ImportError as cause:
         raise TabularNotInstalledError(
-            "Station data requires the `tabular_py` module, which ships in the "
+            "Entity data requires the `tabular_py` module, which ships in the "
             "`dclimate-tabular-py` distribution. Reinstall this package, or "
             "install it directly with:\n"
             "  uv pip install dclimate-tabular-py"
@@ -53,8 +59,8 @@ def _require_tabular() -> typing.Any:
     return tabular_py
 
 
-class StationsClient:
-    """Loads station datasets by CID.
+class EntitiesClient:
+    """Loads entity datasets by CID.
 
     Reads go through whichever transport the parent client already holds -- its
     ``KuboCAS`` when there is one, so pinning, retries, and configured endpoints
@@ -71,7 +77,7 @@ class StationsClient:
         self._cas = cas
         self._owned_sources: list[typing.Any] = []
 
-    def _adopt_sources_from(self, other: StationsClient) -> None:
+    def _adopt_sources_from(self, other: EntitiesClient) -> None:
         """Take over another instance's open sources, so they still get closed.
 
         Used when the parent client rebuilds this namespace onto a different
@@ -100,14 +106,24 @@ class StationsClient:
         cid: str,
         *,
         gateway_url: str | None = None,
-    ) -> WrappedStationDataset:
-        """Open a station dataset by root CID.
+        column_key: ColumnKey | None = None,
+    ) -> WrappedEntityDataset:
+        """Open an entity dataset by root CID.
 
         Reads go through the IPFS HTTP gateway, so this needs no local daemon.
+
+        ``column_key`` maps each schema field to the column name queries and
+        results use. A dataset's published column names are a property of its
+        profile, not of the stored blocks: GHCND stores a field named ``tmax``
+        and publishes it as ``TMAX``, NDBC preserves mixed case like ``SwH``.
+        The reader's default is the identity -- the schema's own field names --
+        so without the dataset's mapping the published names are unreachable:
+        ``elements("TMAX")`` is an unknown element even though every GHCND doc
+        names it that way. For GHCND, pass ``lambda field: field.name.upper()``.
         """
         if not cid:
             raise DatasetNotFoundError(
-                "A station dataset CID is required. Catalog resolution is not "
+                "An entity dataset CID is required. Catalog resolution is not "
                 "available yet."
             )
 
@@ -120,6 +136,9 @@ class StationsClient:
 
         tabular = _require_tabular()
         source = self._source(gateway_url)
+        # Forwarded only when given, so tabular's own `default_column_key` stays
+        # the default rather than being shadowed by a `None` this layer invented.
+        mapping = {} if column_key is None else {"column_key": column_key}
         # Opening reads and parses the dataset's manifest, so a well-formed CID
         # that points at something else fails here rather than at query time.
         # Translated like any other reader failure: a caller catching
@@ -130,9 +149,11 @@ class StationsClient:
         # tabular's errors too, and a caller has no reason to expect the boundary
         # to stop at `open`.
         try:
-            return wrap_station_dataset(await tabular.StationDataset.open(source, root))
+            return wrap_entity_dataset(
+                await tabular.EntityDataset.open(source, root, **mapping)
+            )
         except BaseException as cause:
-            translate_station_error(cause)
+            translate_entity_error(cause)
 
     async def nearest(
         self,
@@ -144,31 +165,36 @@ class StationsClient:
         max_km: float | None = None,
         within: tuple[TimeInput, TimeInput] | None = None,
         gateway_url: str | None = None,
-    ) -> NearestStation:
-        """The station nearest a point that actually has the data you asked for.
+        column_key: ColumnKey | None = None,
+    ) -> NearestEntity:
+        """The entity nearest a point that actually has the data you asked for.
 
-        Resolves the dataset and the station in one call, because "which station
-        should I use for this location" is the question most callers open a
-        station dataset to ask, and answering it through :meth:`load` means
+        Resolves the dataset and the entity in one call, because "which station
+        should I use for this location" is the question most callers open an
+        entity dataset to ask, and answering it through :meth:`load` means
         knowing that ``nearest`` needs ``columns`` to avoid picking a station
         full of nulls.
 
-        ``columns`` restricts the search to stations that actually report every
-        one of those columns. Without it, "nearest" means nearest *station*, not
+        ``columns`` restricts the search to entities that actually report every
+        one of those columns. Without it, "nearest" means nearest *entity*, not
         nearest *data* -- a station 40 km away that has never recorded TMAX wins
-        over one 3,000 km away that has. Presence means the station reported the
+        over one 3,000 km away that has. Presence means the entity reported the
         column at some point, not that it reported it recently; pass ``within``
         to narrow that to a time range.
 
-        Returns the distance alongside the station: a dataset with no coverage
-        near the queried point still has a nearest station, and the only way to
+        ``columns`` names columns as this dataset publishes them, so a dataset
+        needing a ``column_key`` needs it here too -- otherwise every name in
+        ``columns`` is unknown and the search matches nothing.
+
+        Returns the distance alongside the entity: a dataset with no coverage
+        near the queried point still has a nearest entity, and the only way to
         tell that apart from a good match is how far away it is.
         """
-        dataset = await self.load(cid, gateway_url=gateway_url)
+        dataset = await self.load(cid, gateway_url=gateway_url, column_key=column_key)
         # Already wrapped, so failures here arrive as this library's errors.
         return typing.cast(
-            "NearestStation",
-            await dataset.find_nearest_station(
+            "NearestEntity",
+            await dataset.find_nearest_entity(
                 latitude,
                 longitude,
                 max_km=max_km,

@@ -40,7 +40,7 @@ from .ceramic_api import (
     list_versions_from_url,
 )
 from .siren import SirenClient
-from .stations import StationsClient
+from .entities import EntitiesClient
 from .siren.types import (
     SirenMetricDataPoint,
     SirenMetricQuery,
@@ -171,9 +171,9 @@ class dClimateClient:
         if siren is not None:
             self._siren_client = SirenClient(siren)
 
-        # Station datasets. Unlike Siren this needs no configuration, so it is
-        # built on first access rather than here -- see the `stations` property.
-        self._stations_client: typing.Optional["StationsClient"] = None
+        # Entity datasets. Unlike Siren this needs no configuration, so it is
+        # built on first access rather than here -- see the `entities` property.
+        self._entities_client: typing.Optional["EntitiesClient"] = None
 
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
@@ -223,17 +223,17 @@ class dClimateClient:
             cleanup_error = _merge_cleanup_error(cleanup_error, error)
 
         try:
-            if self._stations_client is not None:
-                await self._stations_client.aclose()
+            if self._entities_client is not None:
+                await self._entities_client.aclose()
         except BaseException as error:
             cleanup_error = _merge_cleanup_error(cleanup_error, error)
         finally:
             # Dropped, not just closed. It holds the `KuboCAS` closed below, and
             # a closed `KuboCAS` never reopens -- so keeping this instance would
-            # make station reads after the context fail on a dead transport
+            # make entity reads after the context fail on a dead transport
             # instead of falling back to the gateway, which is what the
-            # `stations` property promises outside the context.
-            self._stations_client = None
+            # `entities` property promises outside the context.
+            self._entities_client = None
 
         try:
             if self._kubo_cas is not None:
@@ -867,27 +867,27 @@ class dClimateClient:
         )
 
     # ------------------------------------------------------------------
-    # Station (point-observation) datasets
+    # Entity (point-observation) datasets
     # ------------------------------------------------------------------
 
     @property
-    def stations(self) -> StationsClient:
-        """Station datasets, e.g. ``await client.stations.load(cid)``.
+    def entities(self) -> EntitiesClient:
+        """Entity datasets, e.g. ``await client.entities.load(cid)``.
 
         Unlike :attr:`siren`, this needs no configuration -- it reads over the
         transport the client already has, so requiring an option would be
         ceremony with nothing behind it.
 
         Reads prefer the client's own ``KuboCAS`` when the client is open, so
-        pinning, retries, and configured endpoints apply to station reads too.
+        pinning, retries, and configured endpoints apply to entity reads too.
         Outside the async context there is no ``KuboCAS`` yet, so this falls back
         to the plain HTTP gateway -- which is why the instance is rebuilt if it
         was first created before ``__aenter__``.
         """
         cas = self._kubo_cas
-        current = self._stations_client
+        current = self._entities_client
         if current is None or current._cas is not cas:
-            replacement = StationsClient(
+            replacement = EntitiesClient(
                 gateway_url=self._catalog_gateway_base_url,
                 cas=cas,
             )
@@ -896,7 +896,7 @@ class dClimateClient:
                 # opened. It is the only one `__aexit__` closes, so without this
                 # those connection pools would leak.
                 replacement._adopt_sources_from(current)
-            current = self._stations_client = replacement
+            current = self._entities_client = replacement
         return current
 
     # ------------------------------------------------------------------
