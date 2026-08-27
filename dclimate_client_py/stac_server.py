@@ -100,6 +100,12 @@ class ResolvedDatasetDetails:
 
     cid: str
     variant: str
+    #: Storage layout the item advertises: ``"tabular"`` for entity
+    #: (point-observation) datasets, ``"zarr"`` or absent for the gridded
+    #: datasets that were the only kind when this type was written. This is what
+    #: lets ``load_entities`` refuse a gridded collection rather than handing its
+    #: CID to a reader that will fail deep inside a manifest parse.
+    layout: Optional[str] = None
     versions_api: Optional[str] = None
     provenance_api: Optional[str] = None
     citation_api: Optional[str] = None
@@ -109,6 +115,14 @@ class ResolvedDatasetDetails:
     is_citable: Optional[bool] = None
     retention_class: Optional[str] = None
     zarr_resolutions: tuple[ZarrResolution, ...] = ()
+    #: The collection id this resolution actually landed on, when it differs
+    #: from the one the caller asked for. Resolution may expand a unique short
+    #: name (``ghcnd`` -> ``noaa_ghcnd``), and that expanded identity is what
+    #: the item was found under -- so callers building metadata must report it
+    #: rather than the name they started with, which would name a collection
+    #: the result did not come from. ``None`` means no expansion happened and
+    #: the requested name stands.
+    collection: Optional[str] = None
 
     def as_resolved_dataset(self) -> ResolvedDataset:
         return ResolvedDataset(self.cid, self.variant)
@@ -525,6 +539,7 @@ def _resolve_dataset_from_features(
         return ResolvedDatasetDetails(
             cid=cid,
             variant=selected_variant,
+            layout=properties.get("dclimate:layout"),
             versions_api=properties.get("dclimate:versions_api"),
             provenance_api=properties.get("dclimate:provenance_api"),
             citation_api=properties.get("dclimate:citation_api"),
@@ -660,6 +675,97 @@ def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:
     return cid.replace("ipfs://", "", 1) if cid.startswith("ipfs://") else cid
 
 
+def _fetch_all_collections(server_url: str) -> list[Dict[str, Any]]:
+    """
+    Fetch every page of ``/collections``.
+
+    The endpoint paginates and defaults to a page size smaller than the number
+    of collections published, so a single unpaged request silently returns a
+    prefix: ``numberMatched`` exceeds ``numberReturned`` and the tail is simply
+    absent. That is invisible at the call site -- the response is a well-formed
+    list, just a short one -- and the collections it drops lose the title and
+    organization this endpoint is the only source of.
+
+    Follows ``rel="next"`` rather than passing a large ``limit``, because a
+    limit only moves the cliff: it is a guess about how many collections will
+    exist later, and the day the catalogue outgrows it the truncation returns
+    silently. The link is what the server itself says comes next.
+
+    Shares the page cap, repeat-detection, and origin check of the item search
+    above: a server returning a ``next`` that points at the page just fetched
+    would otherwise spin forever, and one pointing off-origin is refused rather
+    than followed. Every one of those ends the walk by raising, because each
+    leaves the catalogue incomplete -- and an incomplete catalogue that returns
+    normally is indistinguishable from a complete one.
+    """
+    collections: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    url: Optional[str] = f"{server_url.rstrip('/')}/collections"
+
+    for _ in range(_MAX_SEARCH_PAGES):
+        if not url:
+            break
+        if url in seen:
+            raise ValueError(
+                "STAC server /collections pagination repeated a request; "
+                "results truncated"
+            )
+        seen.add(url)
+
+        response = _client().get(url, timeout=10)
+        response.raise_for_status()
+        body = response.json()
+        collections.extend(body.get("collections", []) or [])
+
+        next_href = next(
+            (
+                link.get("href")
+                for link in (body.get("links") or [])
+                if isinstance(link, dict) and link.get("rel") == "next"
+            ),
+            None,
+        )
+        if not next_href:
+            # Cleared before breaking so a surviving `url` below means exactly
+            # one thing: the page budget ran out with another page still to
+            # fetch. A clean finish must not look like a truncated one.
+            url = None
+            break
+
+        # Resolved against the current page so a relative `next` works.
+        candidate = urljoin(url, next_href)
+        parsed_candidate = urlsplit(candidate)
+        # Following an off-origin link would be an open redirect out to another
+        # host, so it is refused -- but refused loudly. Dropping it silently
+        # would end the walk exactly like a server that said it was finished,
+        # handing back a catalogue that looks complete while the collections
+        # past this point go missing. Same rule, and same reason, as the item
+        # search's pagination-link check.
+        if (
+            _url_origin(candidate) != _url_origin(server_url)
+            or parsed_candidate.username is not None
+            or parsed_candidate.password is not None
+        ):
+            raise ValueError(
+                "STAC server /collections pagination link must use the "
+                f"configured server origin {_url_origin(server_url)!r}: "
+                f"{candidate!r}"
+            )
+        url = candidate
+
+    # Reached only with a live `next` still in hand: the loop ran out of budget
+    # rather than out of pages. Returning here would hand back a catalogue that
+    # looks complete, and the collections missing from it would surface later as
+    # untitled or unknown datasets rather than as this failure.
+    if url:
+        raise ValueError(
+            f"STAC server /collections pagination exceeded {_MAX_SEARCH_PAGES} "
+            "pages; results truncated"
+        )
+
+    return collections
+
+
 def list_available_datasets_from_stac_server(
     server_url: str = STAC_SERVER_URL,
 ) -> Dict[str, Dict[str, Any]]:
@@ -687,9 +793,7 @@ def list_available_datasets_from_stac_server(
       disagree.
     - Search pagination is bounded to avoid looping on malformed ``next`` links.
     """
-    collections_resp = _client().get(f"{server_url}/collections", timeout=10)
-    collections_resp.raise_for_status()
-    collections_body = collections_resp.json()
+    collections_body = {"collections": _fetch_all_collections(server_url)}
 
     # Accumulator per collection. Built up from /collections then enriched by
     # the /search response. Collections that have no items end up filtered out

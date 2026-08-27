@@ -44,7 +44,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Must satisfy the JS client's `engines.node` floor: yarn treats a
+          # mismatch as a hard error and aborts the install. Keep in step with
+          # dclimate-client-js's own workflows when that floor moves.
+          node-version: '22'
 
       - name: Enable Corepack
         run: corepack enable

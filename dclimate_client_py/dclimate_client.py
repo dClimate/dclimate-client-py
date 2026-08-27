@@ -8,6 +8,7 @@ internally, abstracting away KuboCAS lifecycle management.
 import asyncio
 import typing
 from collections.abc import Mapping
+from dataclasses import replace
 
 if typing.TYPE_CHECKING:
     import pystac
@@ -24,6 +25,7 @@ from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import (
     ConflictingResolutionSelectionError,
+    DatasetNotFoundError,
     InvalidSelectionError,
     MultiresolutionSelectionRequiredError,
     ResolutionNotAvailableError,
@@ -40,6 +42,14 @@ from .ceramic_api import (
     list_versions_from_url,
 )
 from .siren import SirenClient
+from .entities import EntitiesClient, WrappedEntityDataset
+
+if typing.TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
+    from tabular_py import TableField
+
+    ColumnKey = Callable[[TableField], str]
 from .siren.types import (
     SirenMetricDataPoint,
     SirenMetricQuery,
@@ -65,6 +75,11 @@ def _merge_cleanup_error(
         return current
     new.__context__ = current
     return new
+
+
+#: The ``dclimate:layout`` value marking a STAC item as entity
+#: (point-observation) data rather than a gridded Zarr store.
+ENTITY_DATASET_LAYOUT = "tabular"
 
 
 class dClimateClient:
@@ -170,6 +185,10 @@ class dClimateClient:
         if siren is not None:
             self._siren_client = SirenClient(siren)
 
+        # Entity datasets. Unlike Siren this needs no configuration, so it is
+        # built on first access rather than here -- see the `entities` property.
+        self._entities_client: typing.Optional["EntitiesClient"] = None
+
     async def __aenter__(self) -> "dClimateClient":
         """Initialize KuboCAS when entering async context."""
         # Create KuboCAS with configured endpoints
@@ -216,6 +235,19 @@ class dClimateClient:
                 await self._siren_client.aclose()
         except BaseException as error:
             cleanup_error = _merge_cleanup_error(cleanup_error, error)
+
+        try:
+            if self._entities_client is not None:
+                await self._entities_client.aclose()
+        except BaseException as error:
+            cleanup_error = _merge_cleanup_error(cleanup_error, error)
+        finally:
+            # Dropped, not just closed. It holds the `KuboCAS` closed below, and
+            # a closed `KuboCAS` never reopens -- so keeping this instance would
+            # make entity reads after the context fail on a dead transport
+            # instead of falling back to the gateway, which is what the
+            # `entities` property promises outside the context.
+            self._entities_client = None
 
         try:
             if self._kubo_cas is not None:
@@ -736,19 +768,25 @@ class dClimateClient:
                     async with httpx.AsyncClient(
                         timeout=30, follow_redirects=False
                     ) as client:
-                        return await aresolve_dataset_from_stac_server(
+                        return replace(
+                            await aresolve_dataset_from_stac_server(
+                                collection=resolved_collection,
+                                dataset=dataset,
+                                variant=variant,
+                                server_url=self._stac_server_url,
+                                client=client,
+                            ),
                             collection=resolved_collection,
-                            dataset=dataset,
-                            variant=variant,
-                            server_url=self._stac_server_url,
-                            client=client,
                         )
-                return await aresolve_dataset_from_stac_server(
+                return replace(
+                    await aresolve_dataset_from_stac_server(
+                        collection=resolved_collection,
+                        dataset=dataset,
+                        variant=variant,
+                        server_url=self._stac_server_url,
+                        client=self._get_stac_http_client(),
+                    ),
                     collection=resolved_collection,
-                    dataset=dataset,
-                    variant=variant,
-                    server_url=self._stac_server_url,
-                    client=self._get_stac_http_client(),
                 )
             except (httpx.HTTPError, ValueError):
                 pass
@@ -782,7 +820,7 @@ class dClimateClient:
                 if len(prefixed_matches) == 1:
                     resolved_collection = prefixed_matches[0]
 
-        return await asyncio.to_thread(
+        details = await asyncio.to_thread(
             resolve_dataset_from_stac,
             catalog=self._stac_catalog,
             collection=resolved_collection,
@@ -790,6 +828,14 @@ class dClimateClient:
             variant=variant,
             organization=organization,
         )
+        # The name resolved above is the one the item was actually found under,
+        # and it is not always the one the caller passed: a unique short name
+        # expands here (`ghcnd` -> `noaa_ghcnd`). Returned rather than left in
+        # this local, because callers build `collection`, `slug`, and
+        # `organization` from it -- and `organization` is derived by splitting
+        # on `_`, so an unexpanded name does not merely mislabel the collection,
+        # it silently reports no organization at all.
+        return replace(details, collection=resolved_collection)
 
     async def list_dataset_versions(
         self,
@@ -847,6 +893,174 @@ class dClimateClient:
             details.versions_api,
             commit_id,
         )
+
+    # ------------------------------------------------------------------
+    # Entity (point-observation) datasets
+    # ------------------------------------------------------------------
+
+    async def load_entities(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+        gateway_url: typing.Optional[str] = None,
+        column_key: typing.Optional["ColumnKey"] = None,
+    ) -> typing.Tuple["WrappedEntityDataset", DatasetMetadata]:
+        """Open an entity (point-observation) dataset by catalog name.
+
+        The entity counterpart to :meth:`load_dataset`, and deliberately a
+        separate method rather than a layout branch inside it. The two return
+        different types with different query surfaces -- an entity dataset has no
+        ``point()`` and its ``nearest()`` can find nothing -- so folding them
+        together would widen ``load_dataset``'s return to a union and make every
+        existing gridded caller narrow before calling a Zarr method. Callers know
+        which kind they want; the entry point says so.
+
+        Resolution is the same STAC lookup :meth:`load_dataset` performs, so a
+        dataset is addressed the same way here as anywhere else in the library,
+        and the release metadata comes back alongside it. That matters more for
+        entity data than for gridded: ``commit_id`` and ``stream_id`` identify
+        the exact snapshot a query ran against, which is what lets a caller
+        re-resolve it later rather than silently getting whatever is newest.
+
+        Columns are named by the schema's own field names unless ``column_key``
+        is given. That mapping is a property of a dataset's publishing profile
+        (GHCND stores ``tmax`` and publishes ``TMAX``), and nothing readable
+        from here states it, so it is the caller's to pass rather than this
+        method's to guess.
+
+        Raises
+        ------
+        DatasetNotFoundError
+            If the resolved item is not tabular. A gridded collection named here
+            is a caller mistake worth reporting in terms of the fix, not a
+            manifest parse failure deep inside the reader.
+        """
+        resolved = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+        # Taken from the resolution rather than recomputed here: resolution can
+        # expand a unique short name against the catalogue (`ghcnd` ->
+        # `noaa_ghcnd`), which the organization-prefix rule below cannot know
+        # about. Falling back to that rule keeps the old behaviour for the
+        # resolvers that report no identity of their own.
+        resolved_collection = resolved.collection or collection
+        if (
+            resolved.collection is None
+            and organization
+            and not collection.startswith(f"{organization}_")
+        ):
+            resolved_collection = f"{organization}_{collection}"
+
+        # Checked rather than assumed: the catalog holds both kinds, and the CID
+        # of a Zarr store handed to the entity reader fails as a corrupt-dataset
+        # error that says nothing about the actual mistake.
+        #
+        # Positive match, not "absent or tabular". Entity support postdates
+        # `dclimate:layout`, so an item without the field is a gridded one from
+        # before the convention -- treating absence as permission would admit
+        # exactly the Zarr items this guard exists to catch, in order to
+        # accommodate legacy entity items that cannot exist.
+        if resolved.layout != ENTITY_DATASET_LAYOUT:
+            found = resolved.layout or "gridded"
+            raise DatasetNotFoundError(
+                f"{collection}/{dataset} is a '{found}' dataset, not an entity "
+                "dataset. Use load_dataset() for gridded data."
+            )
+
+        # `column_key` is forwarded only when given, so the reader's identity
+        # default stands.
+        #
+        # No default is supplied here, deliberately. `column_key` renames
+        # columns; it does not gate access to them. Without one, every column is
+        # still readable under the schema's own field names -- which are what
+        # the dataset actually stores, so they are never wrong. Supplying a
+        # default would only be guessing at the spelling a dataset's publishing
+        # profile uses, and a wrong guess renames columns silently rather than
+        # failing.
+        #
+        # The profile is not derivable here either: tabular deliberately stores
+        # the schema's names rather than the writer's rendering, precisely so a
+        # reader is not bound to one profile's casing, and STAC does not carry
+        # the mapping. So a caller wanting the published spelling passes it, the
+        # same as with `entities.load(cid)`.
+        entity_dataset = await self.entities.load(
+            resolved.cid,
+            gateway_url=gateway_url,
+            **({} if column_key is None else {"column_key": column_key}),
+        )
+
+        metadata: DatasetMetadata = {
+            "collection": resolved_collection,
+            "dataset": dataset,
+            "variant": resolved.variant,
+            "slug": (
+                f"{organization}/{resolved_collection}/{dataset}/{resolved.variant}"
+                if organization
+                else f"{resolved_collection}/{dataset}/{resolved.variant}"
+            ),
+            "cid": resolved.cid,
+            "url": None,
+            "timestamp": None,
+            "source": "stac",
+            "organization": organization
+            or (
+                resolved_collection.split("_")[0]
+                if resolved_collection and "_" in resolved_collection
+                else None
+            ),
+        }
+        if resolved.versions_api is not None:
+            metadata["versions_api"] = resolved.versions_api
+        if resolved.provenance_api is not None:
+            metadata["provenance_api"] = resolved.provenance_api
+        if resolved.citation_api is not None:
+            metadata["citation_api"] = resolved.citation_api
+        if resolved.stream_id is not None:
+            metadata["stream_id"] = resolved.stream_id
+        if resolved.commit_id is not None:
+            metadata["commit_id"] = resolved.commit_id
+        if resolved.version_label is not None:
+            metadata["version_label"] = resolved.version_label
+        if resolved.is_citable is not None:
+            metadata["is_citable"] = resolved.is_citable
+        if resolved.retention_class is not None:
+            metadata["retention_class"] = resolved.retention_class
+
+        return entity_dataset, metadata
+
+    @property
+    def entities(self) -> EntitiesClient:
+        """Entity datasets, e.g. ``await client.entities.load(cid)``.
+
+        Unlike :attr:`siren`, this needs no configuration -- it reads over the
+        transport the client already has, so requiring an option would be
+        ceremony with nothing behind it.
+
+        Reads prefer the client's own ``KuboCAS`` when the client is open, so
+        pinning, retries, and configured endpoints apply to entity reads too.
+        Outside the async context there is no ``KuboCAS`` yet, so this falls back
+        to the plain HTTP gateway -- which is why the instance is rebuilt if it
+        was first created before ``__aenter__``.
+        """
+        cas = self._kubo_cas
+        current = self._entities_client
+        if current is None or current._cas is not cas:
+            replacement = EntitiesClient(
+                gateway_url=self._catalog_gateway_base_url,
+                cas=cas,
+            )
+            if current is not None:
+                # The replacement inherits any gateway sources the old instance
+                # opened. It is the only one `__aexit__` closes, so without this
+                # those connection pools would leak.
+                replacement._adopt_sources_from(current)
+            current = self._entities_client = replacement
+        return current
 
     # ------------------------------------------------------------------
     # Siren REST API methods

@@ -89,6 +89,18 @@ class ConflictingResolutionSelectionError(InvalidSelectionError):
     """Raised when both resolution and raw Zarr group are provided."""
 
 
+class DatasetCorruptError(ZarrClientError):
+    """Raised when the stored dataset is malformed, rather than the request against it.
+
+    Distinct from :class:`InvalidSelectionError` because the two point at
+    different culprits. An invalid selection is the caller's to fix by asking
+    differently; this says the bytes behind the CID are inconsistent, so no
+    rephrasing helps and the dataset's publisher is who needs to know. Reporting
+    it as a bad selection would send a caller hunting for a mistake in their own
+    query.
+    """
+
+
 class VariantNotFoundError(ZarrClientError):
     """Raised when specified variant is not found in dataset"""
 
@@ -112,3 +124,7 @@ class X402PaymentError(ZarrClientError):
 
 class X402NotInstalledError(ZarrClientError):
     """Raised when x402 auth is configured but the x402 package is not installed"""
+
+
+class TabularNotInstalledError(ZarrClientError):
+    """Raised when entity data is requested but tabular-py is not installed"""

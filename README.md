@@ -227,6 +227,123 @@ Callers loading a direct CID have no STAC resolution mapping and must pass
 generator's `metadataGroup` is internal catalog-generation configuration and
 does not influence client selection.
 
+## Entity data usage
+
+Gridded Zarr datasets come from `load_dataset`. Point-observation **entity**
+datasets (GHCND and friends) live under `client.entities`, and read the same way:
+degrees, ISO timestamps, chained selections.
+
+"Entity" is the underlying library's word for the thing a row belongs to — a
+weather station in GHCND, a buoy in NDBC. Not every dataset is keyed by a place,
+so an entity need not have a position at all, and those simply never match a geo
+query.
+
+Entity support is built on
+[`tabular-py`](https://github.com/dClimate/tabular-py), which installs
+automatically as a dependency. It is imported as `tabular_py` but distributed as
+`dclimate-tabular-py`, because PyPI normalises the name `tabular-py` onto an
+unrelated existing project.
+
+```python
+async with dClimateClient() as client:
+    ghcnd = await client.entities.load("bafyr4i...")
+
+    # Every entity, with position and coverage window.
+    for e in await ghcnd.list_entities():
+        print(e.entity_id, e.latitude, e.longitude, e.start, e.end)
+
+    # Entities within 50 km of a point, over one week.
+    records = await (
+        ghcnd
+        .circle(40.75, -73.99, 50)
+        .time_range("2023-01-01", "2023-01-07")
+        .to_records("TMAX")
+    )
+```
+
+Reads go through the client's own IPFS transport, so pinning, retries, and
+configured endpoints apply to entity reads too. Resolution is by CID for now;
+STAC catalog support will follow.
+
+Column names come from the dataset's own schema, uppercased — which is how every
+dClimate dataset published so far names them, so `TMAX` and `PRCP` work as
+documented. A dataset whose published names are not simply the uppercase of its
+stored ones needs its own mapping, passed as `column_key`:
+
+```python
+# The reader's default. Pass a different one only for a dataset that needs it.
+mixed = await client.entities.load("bafyr4i...", column_key=lambda f: f.name)
+print([c.name for c in mixed.columns()])   # the schema's own names, verbatim
+```
+
+Each column also states the unit its values are in. Units are documentation,
+never an instruction to convert: a GHCND `TMAX` declaring `degC_tenths` really
+does return `194` for 19.4 °C.
+
+An entity can additionally declare windows of its history that are *unknown*, as
+distinct from empty — a fetch that failed, say. Without that, zero rows and "no
+observations" are indistinguishable:
+
+```python
+plan = await ghcnd.select("USW00023174").time_range("2024-01-01", "2024-12-31").plan()
+for entity_id, gaps in plan.gaps:
+    for gap in gaps:
+        print(entity_id, gap.reason)   # e.g. "awdb: HTTP 500"
+```
+
+Selections return new instances, so a partial selection can be branched:
+
+```python
+week = ghcnd.time_range("2023-01-01", "2023-01-07")
+nyc = await week.select("USW00094728").rows()
+lax = await week.select("USW00023174").rows()
+```
+
+Two things differ from `GeotemporalData`, because the data model differs:
+
+- **`nearest(lat, lon, max_km=...)` instead of a point selection.** A grid always
+  has a cell under any coordinate; entities are irregular, so the nearest one may
+  be far away. Pass `max_km` to make that a hard bound rather than a surprise.
+- **`where(...)` has no gridded counterpart.** Row-level predicates are pushed
+  down to fragment statistics, so most fragments are skipped without being read:
+
+```python
+from tabular_py import gt
+
+# `nearest` reads the entity index to find the match, so it is awaited --
+# unlike the synchronous selections above.
+hot_days = await (
+    (await ghcnd.nearest(29.98, -95.36))
+    .time_range("2025-01-01", "2025-12-31")
+    .where(gt("TMAX", 350))  # tenths of °C, so 35 °C
+    .rows()
+)
+```
+
+`nearest` alone means the nearest *entity*, which is not always the nearest
+*usable data*: near downtown Los Angeles the closest station is 0.63 km away and
+has never recorded `TMAX`, while the closest that has is 5.4 km away. Ask for the
+columns you need, and narrow them to a time range when "has ever reported" is not
+good enough:
+
+```python
+# Resolves the dataset and the entity in one call.
+nearest = await client.entities.nearest(
+    "bafyr4i...",
+    34.0522, -118.2437,
+    columns=["TMAX"],
+    within=("2024-01-01", "2024-12-31"),
+    max_km=50,
+)
+print(nearest.entity_id, nearest.km)
+```
+
+Entity failures arrive as this library's own errors, for the whole chain rather
+than just `load`: an unknown column is an `InvalidSelectionError`, a well-formed
+query that matched nothing is a `NoDataFoundError`, and bytes that do not
+describe a readable dataset are a `DatasetCorruptError`. All descend from
+`ZarrClientError`, so one `except` still covers the client.
+
 ## Siren API usage
 
 The Python client also exposes a Siren REST client for metrics and regions.

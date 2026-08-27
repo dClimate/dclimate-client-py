@@ -1,6 +1,7 @@
 from unittest.mock import Mock
 
 import pytest
+from dataclasses import replace
 import pystac
 import xarray as xr
 import httpx
@@ -411,7 +412,11 @@ async def test_version_catalog_fallback_normalizes_shorthand_collection(monkeypa
         organization=None,
     )
 
-    assert details is resolved
+    # The resolver's payload is passed through unchanged except for the
+    # identity the expansion just established: `era5` was matched against the
+    # catalogue as `ecmwf_era5`, and that is the name callers must report.
+    assert details == replace(resolved, collection="ecmwf_era5")
+    assert details.collection == "ecmwf_era5"
     resolver.assert_called_once_with(
         catalog=catalog,
         collection="ecmwf_era5",

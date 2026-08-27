@@ -724,3 +724,34 @@ def test_catalog_lister_keeps_bare_item_with_default_variant_property():
 
     assert variant["dataset"] == "precip-daily"
     assert variant["variant"] == "default"
+
+
+def test_stac_server_collections_raises_when_page_limit_would_truncate(monkeypatch):
+    """
+    Every ``/collections`` page advertises another next link, so the walk can
+    never terminate naturally. Returning what it had would hand back a
+    catalogue that looks complete, with the missing collections showing up
+    later as untitled or unknown datasets rather than as this failure.
+    """
+    monkeypatch.setattr(stac_server, "_MAX_SEARCH_PAGES", 2)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "collections": [{"id": f"coll-{calls}", "title": f"Coll {calls}"}],
+                "links": [{"rel": "next", "href": f"/collections?page={calls + 1}"}],
+            },
+            request=request,
+        )
+
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
+
+    with pytest.raises(ValueError, match="truncated"):
+        stac_server._fetch_all_collections("https://example.test")
+
+    assert calls == 2
