@@ -81,17 +81,6 @@ def _merge_cleanup_error(
 ENTITY_DATASET_LAYOUT = "tabular"
 
 
-def _upper_column_key(field: "TableField") -> str:
-    """Map a schema field to its published column name.
-
-    Published column names are upper case across this catalog's entity datasets
-    while their schema fields are lower case (``tmax`` stored, ``TMAX``
-    published). Defined at module scope rather than inline so every call shares
-    one function identity.
-    """
-    return field.name.upper()
-
-
 class dClimateClient:
     """
     Async context manager for loading dClimate datasets from IPFS.
@@ -920,8 +909,11 @@ class dClimateClient:
         the exact snapshot a query ran against, which is what lets a caller
         re-resolve it later rather than silently getting whatever is newest.
 
-        ``column_key`` defaults to upper-casing, which is what this catalog's
-        datasets publish; pass one for a profile that does otherwise.
+        Columns are named by the schema's own field names unless ``column_key``
+        is given. That mapping is a property of a dataset's publishing profile
+        (GHCND stores ``tmax`` and publishes ``TMAX``), and nothing readable
+        from here states it, so it is the caller's to pass rather than this
+        method's to guess.
 
         Raises
         ------
@@ -957,15 +949,26 @@ class dClimateClient:
                 "dataset. Use load_dataset() for gridded data."
             )
 
+        # `column_key` is forwarded only when given, so the reader's identity
+        # default stands.
+        #
+        # No default is supplied here, deliberately. `column_key` renames
+        # columns; it does not gate access to them. Without one, every column is
+        # still readable under the schema's own field names -- which are what
+        # the dataset actually stores, so they are never wrong. Supplying a
+        # default would only be guessing at the spelling a dataset's publishing
+        # profile uses, and a wrong guess renames columns silently rather than
+        # failing.
+        #
+        # The profile is not derivable here either: tabular deliberately stores
+        # the schema's names rather than the writer's rendering, precisely so a
+        # reader is not bound to one profile's casing, and STAC does not carry
+        # the mapping. So a caller wanting the published spelling passes it, the
+        # same as with `entities.load(cid)`.
         entity_dataset = await self.entities.load(
             resolved.cid,
             gateway_url=gateway_url,
-            # Published column names are a property of the dataset's profile,
-            # not of the stored blocks: the schema field is `tmax` and the
-            # published column is `TMAX`. The reader's default is the identity,
-            # so without this the published names are unreachable -- an unknown
-            # column on a dataset every document describes that way.
-            column_key=column_key if column_key is not None else _upper_column_key,
+            **({} if column_key is None else {"column_key": column_key}),
         )
 
         metadata: DatasetMetadata = {

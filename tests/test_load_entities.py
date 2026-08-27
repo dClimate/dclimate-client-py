@@ -99,22 +99,30 @@ async def test_refuses_an_item_with_no_layout(
 
 
 @pytest.mark.asyncio
-async def test_defaults_column_key_to_upper_case(
+async def test_supplies_no_column_key_of_its_own(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without this the reader defaults to the schema's lower-case field names
-    and ``TMAX`` -- the name every GHCND document uses -- is unknown."""
+    """``column_key`` renames columns; it does not gate access to them.
+
+    Without one every column is still readable under the schema's own field
+    names, which are what the dataset stores and so are never wrong. A default
+    here would be a guess at a dataset's publishing profile -- right for GHCND,
+    silently wrong for a profile like NDBC's ``.spec`` feed that publishes
+    ``SwH``.
+    """
     client = dClimateClient()
     captured = _stub(monkeypatch, client)
 
     await client.load_entities(collection="noaa_ghcnd", dataset="station_observations")
-    assert captured["column_key"](_Field("tmax")) == "TMAX"
+    assert "column_key" not in captured
 
 
 @pytest.mark.asyncio
-async def test_column_key_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """NDBC preserves mixed case like ``SwH``, so the default must be
-    overridable rather than imposed."""
+async def test_forwards_a_callers_column_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NDBC preserves mixed case like ``SwH``, so a caller must be able to say
+    so explicitly."""
     client = dClimateClient()
     captured = _stub(monkeypatch, client)
 
