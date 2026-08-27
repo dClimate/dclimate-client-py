@@ -46,7 +46,6 @@ def translate_entity_error(cause: BaseException) -> NoReturn:
         DatasetIntegrityError,
         DatasetReaderError,
         DclimateTabularError,
-        GeoFilterError,
         PredicateError,
         RangeSourceError,
         EntitySelectionError,
@@ -65,14 +64,13 @@ def translate_entity_error(cause: BaseException) -> NoReturn:
         raise DatasetCorruptError(str(cause)) from cause
 
     # Other reader failures are malformed requests too -- an unknown column, a
-    # predicate against a column that is not comparable, a circle with a
-    # negative radius or a polygon with no outer ring.
-    #
-    # `GeoFilterError` is listed explicitly because tabular descends it from the
-    # base class rather than from `DatasetReaderError`, so without this it falls
-    # through to the corruption branch below and tells a caller who inverted a
-    # bounding box that the publisher's data is bad.
-    if isinstance(cause, (DatasetReaderError, PredicateError, GeoFilterError)):
+    # predicate against a column that is not comparable, an inverted bounding
+    # box or a polygon with no outer ring. The geo case arrives here as a
+    # `GeoFilterError`, which tabular >= 0.2.1 descends from
+    # `DatasetReaderError`; the floor in `pyproject.toml` is what makes naming
+    # it separately unnecessary, since before that it was rooted at the base
+    # class and reached the corruption branch below instead.
+    if isinstance(cause, (DatasetReaderError, PredicateError)):
         raise InvalidSelectionError(str(cause)) from cause
 
     # The gateway failing to hand over bytes is a transport fact, not a statement

@@ -252,12 +252,11 @@ class TestTranslateEntityError:
             DatasetReaderError("unknown column"),
             PredicateError("not comparable"),
             # A malformed geometry is the caller's to fix, exactly like a
-            # malformed predicate. Covered explicitly because tabular-py
-            # descends this one from the base class rather than from
-            # `DatasetReaderError` (tabular-js descends it from the reader
-            # error, so the two ports disagree) -- without its own branch it
-            # reaches the corruption catch-all and blames the publisher for an
-            # inverted bounding box.
+            # malformed predicate. Kept as its own case because nothing here
+            # names `GeoFilterError`: it is caught only by descending from
+            # `DatasetReaderError`, which it did not do before tabular 0.2.1.
+            # If that ever regresses upstream, this fails rather than silently
+            # blaming the publisher for an inverted bounding box.
             GeoFilterError("bbox latitude bounds are inverted"),
         ],
     )
