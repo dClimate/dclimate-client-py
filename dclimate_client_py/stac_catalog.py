@@ -706,6 +706,11 @@ def list_available_datasets(catalog: pystac.Catalog) -> Dict[str, Dict[str, Any]
                             }
                             if cid:
                                 variant_entry["cid"] = cid
+                            # Which loader this dataset needs -- see the note in
+                            # stac_server.py's listing.
+                            layout = (item.properties or {}).get("dclimate:layout")
+                            if layout:
+                                variant_entry["layout"] = layout
                             if spatial:
                                 variant_entry["spatial_extent"] = spatial
                             if temporal:

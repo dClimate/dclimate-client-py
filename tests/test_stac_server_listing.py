@@ -563,3 +563,49 @@ def test_collections_pagination_raises_at_foreign_origin(monkeypatch):
     # (Had it been requested, the handler would have raised AssertionError.)
     with pytest.raises(ValueError, match="configured server origin"):
         list_available_datasets_from_stac_server("https://stac.test")
+
+
+def test_layout_is_carried_onto_variants(monkeypatch):
+    """``dclimate:layout`` says which loader a dataset needs.
+
+    Without it the listing describes every dataset as the same kind, and a
+    caller can only discover that GHCND needs ``load_entities`` rather than
+    ``load_dataset`` by opening it and being refused.
+    """
+    collections = {
+        "collections": [
+            {"id": "noaa_ghcnd", "title": "GHCNd"},
+            {"id": "ecmwf_era5", "title": "ERA5"},
+        ]
+    }
+    search = {
+        "features": [
+            {
+                "id": "noaa_ghcnd-station_observations-default",
+                "collection": "noaa_ghcnd",
+                "properties": {
+                    "dclimate:dataset_id": "station_observations",
+                    "dclimate:variant": "default",
+                    "dclimate:layout": "tabular",
+                    "dclimate:latest_dataset_cid": "ipfs://bafy-ghcnd",
+                },
+            },
+            {
+                "id": "ecmwf_era5-precipitation_total-default",
+                "collection": "ecmwf_era5",
+                "properties": {
+                    "dclimate:dataset_id": "precipitation_total",
+                    "dclimate:variant": "default",
+                    "dclimate:layout": "zarr",
+                    "dclimate:latest_dataset_cid": "ipfs://bafy-era5",
+                },
+            },
+        ]
+    }
+
+    _install_mocks(monkeypatch, collections_body=collections, search_body=search)
+
+    result = list_available_datasets_from_stac_server("https://example.test")
+
+    assert result["noaa_ghcnd"]["variants"][0]["layout"] == "tabular"
+    assert result["ecmwf_era5"]["variants"][0]["layout"] == "zarr"

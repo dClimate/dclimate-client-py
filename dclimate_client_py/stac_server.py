@@ -914,6 +914,17 @@ def list_available_datasets_from_stac_server(
         if cid:
             variant_entry["cid"] = cid
 
+        # Storage layout: "tabular" for entity (point-observation) datasets,
+        # "zarr" for gridded ones. Carried on the listing, not just on
+        # resolution, because it is what tells a caller which loader a dataset
+        # needs -- `load_entities` or `load_dataset` -- before committing to
+        # one. Without it a catalogue listing describes every dataset as if it
+        # were the same kind, and the only way to find out is to open one and
+        # be refused.
+        layout = props.get("dclimate:layout")
+        if layout:
+            variant_entry["layout"] = layout
+
         bbox = feature.get("bbox")
         if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
             variant_entry["spatial_extent"] = SpatialExtent(
