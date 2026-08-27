@@ -743,9 +743,7 @@ def test_stac_server_collections_raises_when_page_limit_would_truncate(monkeypat
             200,
             json={
                 "collections": [{"id": f"coll-{calls}", "title": f"Coll {calls}"}],
-                "links": [
-                    {"rel": "next", "href": f"/collections?page={calls + 1}"}
-                ],
+                "links": [{"rel": "next", "href": f"/collections?page={calls + 1}"}],
             },
             request=request,
         )

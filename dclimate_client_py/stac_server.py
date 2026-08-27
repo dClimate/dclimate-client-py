@@ -115,6 +115,14 @@ class ResolvedDatasetDetails:
     is_citable: Optional[bool] = None
     retention_class: Optional[str] = None
     zarr_resolutions: tuple[ZarrResolution, ...] = ()
+    #: The collection id this resolution actually landed on, when it differs
+    #: from the one the caller asked for. Resolution may expand a unique short
+    #: name (``ghcnd`` -> ``noaa_ghcnd``), and that expanded identity is what
+    #: the item was found under -- so callers building metadata must report it
+    #: rather than the name they started with, which would name a collection
+    #: the result did not come from. ``None`` means no expansion happened and
+    #: the requested name stands.
+    collection: Optional[str] = None
 
     def as_resolved_dataset(self) -> ResolvedDataset:
         return ResolvedDataset(self.cid, self.variant)

@@ -167,3 +167,26 @@ async def test_passes_gateway_through(monkeypatch: pytest.MonkeyPatch) -> None:
         gateway_url="https://override.example",
     )
     assert captured["gateway_url"] == "https://override.example"
+
+
+@pytest.mark.asyncio
+async def test_metadata_reports_the_collection_resolution_landed_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A short name expanded during resolution is what metadata reports.
+
+    Resolution matches a unique short name against the catalogue (``ghcnd`` ->
+    ``noaa_ghcnd``). Reporting the requested name instead would not just
+    mislabel ``collection``: ``organization`` is derived by splitting it on
+    ``_``, so the unexpanded name yields no organization at all, and ``slug``
+    -- which names the returned dataset -- points at a collection the data did
+    not come from.
+    """
+    client = dClimateClient(stac_server_url=None)
+    _stub(monkeypatch, client, _resolved(collection="noaa_ghcnd"))
+
+    _, metadata = await client.load_entities(collection="ghcnd", dataset="daily")
+
+    assert metadata["collection"] == "noaa_ghcnd"
+    assert metadata["organization"] == "noaa"
+    assert metadata["slug"] == "noaa_ghcnd/daily/default"

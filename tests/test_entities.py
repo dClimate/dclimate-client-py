@@ -33,6 +33,7 @@ from tabular_py.errors import (  # noqa: E402
     CodecError,
     DatasetIntegrityError,
     DatasetReaderError,
+    GeoFilterError,
     PredicateError,
     RangeSourceError,
     EntitySelectionError,
@@ -177,6 +178,26 @@ class TestNamespaceLifecycle:
         await client.__aexit__(None, None, None)
         assert closed == [source]
 
+    async def test_repeated_gateway_reads_reuse_one_source(self) -> None:
+        # Each gateway source owns an httpx client, so opening one per call
+        # would make a long-lived client accumulate a connection pool per query
+        # until aclose. Reuse is keyed by URL: a per-request override is a
+        # different gateway and gets its own.
+        entities = EntitiesClient(gateway_url="https://gw.example")
+
+        first = entities._source(None)
+        assert entities._source(None) is first
+        assert len(entities._owned_sources) == 1
+
+        override = entities._source("https://other.example")
+        assert override is not first
+        assert len(entities._owned_sources) == 2
+
+        await entities.aclose()
+        # A closed source must not be handed out again.
+        assert entities._owned_sources == []
+        assert entities._source(None) is not first
+
     async def test_one_failing_source_does_not_strand_the_others(self) -> None:
         # The list is cleared up front, so a source skipped here is never
         # retried by anything.
@@ -227,7 +248,18 @@ class TestTranslateEntityError:
 
     @pytest.mark.parametrize(
         "cause",
-        [DatasetReaderError("unknown column"), PredicateError("not comparable")],
+        [
+            DatasetReaderError("unknown column"),
+            PredicateError("not comparable"),
+            # A malformed geometry is the caller's to fix, exactly like a
+            # malformed predicate. Covered explicitly because tabular-py
+            # descends this one from the base class rather than from
+            # `DatasetReaderError` (tabular-js descends it from the reader
+            # error, so the two ports disagree) -- without its own branch it
+            # reaches the corruption catch-all and blames the publisher for an
+            # inverted bounding box.
+            GeoFilterError("bbox latitude bounds are inverted"),
+        ],
     )
     def test_reader_and_predicate_failures_are_invalid_selections(
         self, cause: Exception

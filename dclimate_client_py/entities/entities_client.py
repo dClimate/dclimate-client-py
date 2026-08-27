@@ -76,6 +76,12 @@ class EntitiesClient:
         self._gateway_url = gateway_url
         self._cas = cas
         self._owned_sources: list[typing.Any] = []
+        # Gateway sources are reused per URL rather than opened per call: each
+        # one owns an httpx client with its own connection pool, and a
+        # long-lived client answering a query per request would otherwise hold
+        # every pool it ever opened until `aclose`. Keyed by the URL because
+        # that is what makes two sources interchangeable.
+        self._sources_by_gateway: dict[str, typing.Any] = {}
 
     def _adopt_sources_from(self, other: EntitiesClient) -> None:
         """Take over another instance's open sources, so they still get closed.
@@ -88,6 +94,10 @@ class EntitiesClient:
         """
         self._owned_sources.extend(other._owned_sources)
         other._owned_sources = []
+        # The cache moves with the sources it points at; leaving entries behind
+        # would hand out a source this instance no longer closes.
+        self._sources_by_gateway.update(other._sources_by_gateway)
+        other._sources_by_gateway = {}
 
     def _source(self, gateway_url: str | None) -> typing.Any:
         tabular = _require_tabular()
@@ -95,10 +105,15 @@ class EntitiesClient:
         # prefer the client's own CAS, which is already configured and pooled.
         if gateway_url is None and self._cas is not None:
             return tabular.CasRangeSource(self._cas)
-        source = tabular.GatewayRangeSource(gateway_url or self._gateway_url)
+        url = gateway_url or self._gateway_url
+        cached = self._sources_by_gateway.get(url)
+        if cached is not None:
+            return cached
+        source = tabular.GatewayRangeSource(url)
         # Gateway sources own an httpx client, so they have to be closed; CAS
         # sources borrow the client's and must not be.
         self._owned_sources.append(source)
+        self._sources_by_gateway[url] = source
         return source
 
     async def load(
@@ -216,6 +231,10 @@ class EntitiesClient:
         them. The first failure is re-raised once the rest are shut.
         """
         sources, self._owned_sources = self._owned_sources, []
+        # Dropped alongside the list: a closed source must not be handed to the
+        # next caller, and reopening on demand is the correct behaviour if this
+        # client is used again.
+        self._sources_by_gateway = {}
         failure: BaseException | None = None
         for source in sources:
             try:

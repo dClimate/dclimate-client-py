@@ -8,6 +8,7 @@ internally, abstracting away KuboCAS lifecycle management.
 import asyncio
 import typing
 from collections.abc import Mapping
+from dataclasses import replace
 
 if typing.TYPE_CHECKING:
     import pystac
@@ -767,19 +768,25 @@ class dClimateClient:
                     async with httpx.AsyncClient(
                         timeout=30, follow_redirects=False
                     ) as client:
-                        return await aresolve_dataset_from_stac_server(
+                        return replace(
+                            await aresolve_dataset_from_stac_server(
+                                collection=resolved_collection,
+                                dataset=dataset,
+                                variant=variant,
+                                server_url=self._stac_server_url,
+                                client=client,
+                            ),
                             collection=resolved_collection,
-                            dataset=dataset,
-                            variant=variant,
-                            server_url=self._stac_server_url,
-                            client=client,
                         )
-                return await aresolve_dataset_from_stac_server(
+                return replace(
+                    await aresolve_dataset_from_stac_server(
+                        collection=resolved_collection,
+                        dataset=dataset,
+                        variant=variant,
+                        server_url=self._stac_server_url,
+                        client=self._get_stac_http_client(),
+                    ),
                     collection=resolved_collection,
-                    dataset=dataset,
-                    variant=variant,
-                    server_url=self._stac_server_url,
-                    client=self._get_stac_http_client(),
                 )
             except (httpx.HTTPError, ValueError):
                 pass
@@ -813,7 +820,7 @@ class dClimateClient:
                 if len(prefixed_matches) == 1:
                     resolved_collection = prefixed_matches[0]
 
-        return await asyncio.to_thread(
+        details = await asyncio.to_thread(
             resolve_dataset_from_stac,
             catalog=self._stac_catalog,
             collection=resolved_collection,
@@ -821,6 +828,14 @@ class dClimateClient:
             variant=variant,
             organization=organization,
         )
+        # The name resolved above is the one the item was actually found under,
+        # and it is not always the one the caller passed: a unique short name
+        # expands here (`ghcnd` -> `noaa_ghcnd`). Returned rather than left in
+        # this local, because callers build `collection`, `slug`, and
+        # `organization` from it -- and `organization` is derived by splitting
+        # on `_`, so an unexpanded name does not merely mislabel the collection,
+        # it silently reports no organization at all.
+        return replace(details, collection=resolved_collection)
 
     async def list_dataset_versions(
         self,
@@ -922,16 +937,24 @@ class dClimateClient:
             is a caller mistake worth reporting in terms of the fix, not a
             manifest parse failure deep inside the reader.
         """
-        resolved_collection = collection
-        if organization and not collection.startswith(f"{organization}_"):
-            resolved_collection = f"{organization}_{collection}"
-
         resolved = await self._resolve_dataset_details(
             collection=collection,
             dataset=dataset,
             variant=variant,
             organization=organization,
         )
+        # Taken from the resolution rather than recomputed here: resolution can
+        # expand a unique short name against the catalogue (`ghcnd` ->
+        # `noaa_ghcnd`), which the organization-prefix rule below cannot know
+        # about. Falling back to that rule keeps the old behaviour for the
+        # resolvers that report no identity of their own.
+        resolved_collection = resolved.collection or collection
+        if (
+            resolved.collection is None
+            and organization
+            and not collection.startswith(f"{organization}_")
+        ):
+            resolved_collection = f"{organization}_{collection}"
 
         # Checked rather than assumed: the catalog holds both kinds, and the CID
         # of a Zarr store handed to the entity reader fails as a corrupt-dataset
