@@ -485,6 +485,7 @@ def resolve_dataset_from_stac(
         return ResolvedDatasetDetails(
             cid=href,
             variant=selected_variant,
+            layout=properties.get("dclimate:layout"),
             versions_api=properties.get("dclimate:versions_api"),
             provenance_api=properties.get("dclimate:provenance_api"),
             citation_api=properties.get("dclimate:citation_api"),

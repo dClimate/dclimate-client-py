@@ -491,3 +491,71 @@ def test_organization_derived_from_underscore_prefix(monkeypatch):
     result = list_available_datasets_from_stac_server("https://example.test")
     assert result["single"]["organization"] is None
     assert result["org_thing"]["organization"] == "org_thing".split("_")[0]
+
+
+def test_collections_pagination_follows_next(monkeypatch):
+    """``/collections`` paginates, and only the first page arrived.
+
+    The endpoint defaults to a page size smaller than the catalogue, so a single
+    unpaged request returns a well-formed but short list. The collections past
+    the first page are not obviously missing -- they simply arrive with no title
+    or organization, because this endpoint is their only source. That surfaced
+    as a live parity test failing on the 11th collection of 14.
+    """
+    requested: list[str] = []
+
+    page_two = {"collections": [{"id": "noaa_gfs", "title": "NOAA GFS Forecast"}]}
+    page_one = {
+        "collections": [{"id": "ecmwf_era5", "title": "ECMWF ERA5 Reanalysis"}],
+        "links": [{"rel": "next", "href": "https://stac.test/collections?offset=1"}],
+        "numberMatched": 2,
+        "numberReturned": 1,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            requested.append(str(request.url))
+            body = page_two if "offset=1" in str(request.url) else page_one
+            return _mock_response(request, body)
+        return _mock_response(request, SAMPLE_SEARCH)
+
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
+
+    result = list_available_datasets_from_stac_server("https://stac.test")
+
+    assert any("offset=1" in url for url in requested), (
+        "second page was never requested"
+    )
+    # The collection from page two must carry the title only /collections knows.
+    assert result["noaa_gfs"]["title"] == "NOAA GFS Forecast"
+
+
+def test_collections_pagination_stops_at_foreign_origin(monkeypatch):
+    """A ``next`` pointing off-origin would walk the client out of its server.
+
+    Stopping loses a page; following loses the boundary. The boundary matters
+    more -- a redirect chain could otherwise steer catalogue reads to a host the
+    caller never configured.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            if "evil.test" in str(request.url):
+                raise AssertionError(f"followed next off-origin: {request.url}")
+            return _mock_response(
+                request,
+                {
+                    "collections": [
+                        {"id": "ecmwf_era5", "title": "ECMWF ERA5 Reanalysis"}
+                    ],
+                    "links": [{"rel": "next", "href": "https://evil.test/collections"}],
+                },
+            )
+        return _mock_response(request, SAMPLE_SEARCH)
+
+    assert _install_mock_client is not None
+    _install_mock_client(stac_server, handler)
+
+    result = list_available_datasets_from_stac_server("https://stac.test")
+    assert "ecmwf_era5" in result

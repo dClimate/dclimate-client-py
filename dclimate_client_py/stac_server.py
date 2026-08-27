@@ -100,6 +100,12 @@ class ResolvedDatasetDetails:
 
     cid: str
     variant: str
+    #: Storage layout the item advertises: ``"tabular"`` for entity
+    #: (point-observation) datasets, ``"zarr"`` or absent for the gridded
+    #: datasets that were the only kind when this type was written. This is what
+    #: lets ``load_entities`` refuse a gridded collection rather than handing its
+    #: CID to a reader that will fail deep inside a manifest parse.
+    layout: Optional[str] = None
     versions_api: Optional[str] = None
     provenance_api: Optional[str] = None
     citation_api: Optional[str] = None
@@ -525,6 +531,7 @@ def _resolve_dataset_from_features(
         return ResolvedDatasetDetails(
             cid=cid,
             variant=selected_variant,
+            layout=properties.get("dclimate:layout"),
             versions_api=properties.get("dclimate:versions_api"),
             provenance_api=properties.get("dclimate:provenance_api"),
             citation_api=properties.get("dclimate:citation_api"),
@@ -660,6 +667,65 @@ def _strip_ipfs_scheme(cid: Optional[str]) -> Optional[str]:
     return cid.replace("ipfs://", "", 1) if cid.startswith("ipfs://") else cid
 
 
+def _fetch_all_collections(server_url: str) -> list[Dict[str, Any]]:
+    """
+    Fetch every page of ``/collections``.
+
+    The endpoint paginates and defaults to a page size smaller than the number
+    of collections published, so a single unpaged request silently returns a
+    prefix: ``numberMatched`` exceeds ``numberReturned`` and the tail is simply
+    absent. That is invisible at the call site -- the response is a well-formed
+    list, just a short one -- and the collections it drops lose the title and
+    organization this endpoint is the only source of.
+
+    Follows ``rel="next"`` rather than passing a large ``limit``, because a
+    limit only moves the cliff: it is a guess about how many collections will
+    exist later, and the day the catalogue outgrows it the truncation returns
+    silently. The link is what the server itself says comes next.
+
+    Shares the page cap and repeat-detection of the item search above: a server
+    returning a ``next`` that points at the page just fetched would otherwise
+    spin forever.
+    """
+    collections: list[Dict[str, Any]] = []
+    seen: set[str] = set()
+    url: Optional[str] = f"{server_url.rstrip('/')}/collections"
+    origin = urlsplit(url)[:2]
+
+    for _ in range(_MAX_SEARCH_PAGES):
+        if not url:
+            break
+        if url in seen:
+            raise ValueError(
+                "STAC server /collections pagination repeated a request; "
+                "results truncated"
+            )
+        seen.add(url)
+
+        response = _client().get(url, timeout=10)
+        response.raise_for_status()
+        body = response.json()
+        collections.extend(body.get("collections", []) or [])
+
+        next_href = next(
+            (
+                link.get("href")
+                for link in (body.get("links") or [])
+                if isinstance(link, dict) and link.get("rel") == "next"
+            ),
+            None,
+        )
+        if not next_href:
+            break
+        # Resolved against the current page so a relative `next` works, and
+        # dropped if it leaves the configured server -- following that would be
+        # an open redirect out to another host.
+        candidate = urljoin(url, next_href)
+        url = candidate if urlsplit(candidate)[:2] == origin else None
+
+    return collections
+
+
 def list_available_datasets_from_stac_server(
     server_url: str = STAC_SERVER_URL,
 ) -> Dict[str, Dict[str, Any]]:
@@ -687,9 +753,7 @@ def list_available_datasets_from_stac_server(
       disagree.
     - Search pagination is bounded to avoid looping on malformed ``next`` links.
     """
-    collections_resp = _client().get(f"{server_url}/collections", timeout=10)
-    collections_resp.raise_for_status()
-    collections_body = collections_resp.json()
+    collections_body = {"collections": _fetch_all_collections(server_url)}
 
     # Accumulator per collection. Built up from /collections then enriched by
     # the /search response. Collections that have no items end up filtered out

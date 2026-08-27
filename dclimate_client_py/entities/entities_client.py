@@ -123,8 +123,9 @@ class EntitiesClient:
         """
         if not cid:
             raise DatasetNotFoundError(
-                "An entity dataset CID is required. Catalog resolution is not "
-                "available yet."
+                "An entity dataset CID is required. To address a dataset by "
+                "name instead, use client.load_entities(collection=..., "
+                "dataset=...)."
             )
 
         from multiformats import CID

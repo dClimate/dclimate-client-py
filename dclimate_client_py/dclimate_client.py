@@ -24,6 +24,7 @@ from .geotemporal_data import GeotemporalData
 from .datasets import DatasetMetadata
 from .dclimate_zarr_errors import (
     ConflictingResolutionSelectionError,
+    DatasetNotFoundError,
     InvalidSelectionError,
     MultiresolutionSelectionRequiredError,
     ResolutionNotAvailableError,
@@ -40,7 +41,14 @@ from .ceramic_api import (
     list_versions_from_url,
 )
 from .siren import SirenClient
-from .entities import EntitiesClient
+from .entities import EntitiesClient, WrappedEntityDataset
+
+if typing.TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
+    from tabular_py import TableField
+
+    ColumnKey = Callable[[TableField], str]
 from .siren.types import (
     SirenMetricDataPoint,
     SirenMetricQuery,
@@ -66,6 +74,22 @@ def _merge_cleanup_error(
         return current
     new.__context__ = current
     return new
+
+
+#: The ``dclimate:layout`` value marking a STAC item as entity
+#: (point-observation) data rather than a gridded Zarr store.
+ENTITY_DATASET_LAYOUT = "tabular"
+
+
+def _upper_column_key(field: "TableField") -> str:
+    """Map a schema field to its published column name.
+
+    Published column names are upper case across this catalog's entity datasets
+    while their schema fields are lower case (``tmax`` stored, ``TMAX``
+    published). Defined at module scope rather than inline so every call shares
+    one function identity.
+    """
+    return field.name.upper()
 
 
 class dClimateClient:
@@ -869,6 +893,119 @@ class dClimateClient:
     # ------------------------------------------------------------------
     # Entity (point-observation) datasets
     # ------------------------------------------------------------------
+
+    async def load_entities(
+        self,
+        collection: str,
+        dataset: str,
+        variant: typing.Optional[str] = None,
+        organization: typing.Optional[str] = None,
+        gateway_url: typing.Optional[str] = None,
+        column_key: typing.Optional["ColumnKey"] = None,
+    ) -> typing.Tuple["WrappedEntityDataset", DatasetMetadata]:
+        """Open an entity (point-observation) dataset by catalog name.
+
+        The entity counterpart to :meth:`load_dataset`, and deliberately a
+        separate method rather than a layout branch inside it. The two return
+        different types with different query surfaces -- an entity dataset has no
+        ``point()`` and its ``nearest()`` can find nothing -- so folding them
+        together would widen ``load_dataset``'s return to a union and make every
+        existing gridded caller narrow before calling a Zarr method. Callers know
+        which kind they want; the entry point says so.
+
+        Resolution is the same STAC lookup :meth:`load_dataset` performs, so a
+        dataset is addressed the same way here as anywhere else in the library,
+        and the release metadata comes back alongside it. That matters more for
+        entity data than for gridded: ``commit_id`` and ``stream_id`` identify
+        the exact snapshot a query ran against, which is what lets a caller
+        re-resolve it later rather than silently getting whatever is newest.
+
+        ``column_key`` defaults to upper-casing, which is what this catalog's
+        datasets publish; pass one for a profile that does otherwise.
+
+        Raises
+        ------
+        DatasetNotFoundError
+            If the resolved item is not tabular. A gridded collection named here
+            is a caller mistake worth reporting in terms of the fix, not a
+            manifest parse failure deep inside the reader.
+        """
+        resolved_collection = collection
+        if organization and not collection.startswith(f"{organization}_"):
+            resolved_collection = f"{organization}_{collection}"
+
+        resolved = await self._resolve_dataset_details(
+            collection=collection,
+            dataset=dataset,
+            variant=variant,
+            organization=organization,
+        )
+
+        # Checked rather than assumed: the catalog holds both kinds, and the CID
+        # of a Zarr store handed to the entity reader fails as a corrupt-dataset
+        # error that says nothing about the actual mistake.
+        #
+        # Positive match, not "absent or tabular". Entity support postdates
+        # `dclimate:layout`, so an item without the field is a gridded one from
+        # before the convention -- treating absence as permission would admit
+        # exactly the Zarr items this guard exists to catch, in order to
+        # accommodate legacy entity items that cannot exist.
+        if resolved.layout != ENTITY_DATASET_LAYOUT:
+            found = resolved.layout or "gridded"
+            raise DatasetNotFoundError(
+                f"{collection}/{dataset} is a '{found}' dataset, not an entity "
+                "dataset. Use load_dataset() for gridded data."
+            )
+
+        entity_dataset = await self.entities.load(
+            resolved.cid,
+            gateway_url=gateway_url,
+            # Published column names are a property of the dataset's profile,
+            # not of the stored blocks: the schema field is `tmax` and the
+            # published column is `TMAX`. The reader's default is the identity,
+            # so without this the published names are unreachable -- an unknown
+            # column on a dataset every document describes that way.
+            column_key=column_key if column_key is not None else _upper_column_key,
+        )
+
+        metadata: DatasetMetadata = {
+            "collection": resolved_collection,
+            "dataset": dataset,
+            "variant": resolved.variant,
+            "slug": (
+                f"{organization}/{resolved_collection}/{dataset}/{resolved.variant}"
+                if organization
+                else f"{resolved_collection}/{dataset}/{resolved.variant}"
+            ),
+            "cid": resolved.cid,
+            "url": None,
+            "timestamp": None,
+            "source": "stac",
+            "organization": organization
+            or (
+                resolved_collection.split("_")[0]
+                if resolved_collection and "_" in resolved_collection
+                else None
+            ),
+        }
+        if resolved.versions_api is not None:
+            metadata["versions_api"] = resolved.versions_api
+        if resolved.provenance_api is not None:
+            metadata["provenance_api"] = resolved.provenance_api
+        if resolved.citation_api is not None:
+            metadata["citation_api"] = resolved.citation_api
+        if resolved.stream_id is not None:
+            metadata["stream_id"] = resolved.stream_id
+        if resolved.commit_id is not None:
+            metadata["commit_id"] = resolved.commit_id
+        if resolved.version_label is not None:
+            metadata["version_label"] = resolved.version_label
+        if resolved.is_citable is not None:
+            metadata["is_citable"] = resolved.is_citable
+        if resolved.retention_class is not None:
+            metadata["retention_class"] = resolved.retention_class
+
+        return entity_dataset, metadata
 
     @property
     def entities(self) -> EntitiesClient:
