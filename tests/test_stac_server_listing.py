@@ -531,12 +531,14 @@ def test_collections_pagination_follows_next(monkeypatch):
     assert result["noaa_gfs"]["title"] == "NOAA GFS Forecast"
 
 
-def test_collections_pagination_stops_at_foreign_origin(monkeypatch):
+def test_collections_pagination_raises_at_foreign_origin(monkeypatch):
     """A ``next`` pointing off-origin would walk the client out of its server.
 
-    Stopping loses a page; following loses the boundary. The boundary matters
-    more -- a redirect chain could otherwise steer catalogue reads to a host the
-    caller never configured.
+    So it is never followed -- a redirect chain could otherwise steer catalogue
+    reads to a host the caller never configured. But it is not dropped silently
+    either: that would end the walk exactly like a server saying it was
+    finished, returning a truncated catalogue that looks whole. Refusing the
+    link keeps the boundary; raising keeps the truncation visible.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -557,5 +559,7 @@ def test_collections_pagination_stops_at_foreign_origin(monkeypatch):
     assert _install_mock_client is not None
     _install_mock_client(stac_server, handler)
 
-    result = list_available_datasets_from_stac_server("https://stac.test")
-    assert "ecmwf_era5" in result
+    # The boundary held: the off-origin href was reported, never fetched.
+    # (Had it been requested, the handler would have raised AssertionError.)
+    with pytest.raises(ValueError, match="configured server origin"):
+        list_available_datasets_from_stac_server("https://stac.test")

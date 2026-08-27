@@ -683,14 +683,16 @@ def _fetch_all_collections(server_url: str) -> list[Dict[str, Any]]:
     exist later, and the day the catalogue outgrows it the truncation returns
     silently. The link is what the server itself says comes next.
 
-    Shares the page cap and repeat-detection of the item search above: a server
-    returning a ``next`` that points at the page just fetched would otherwise
-    spin forever.
+    Shares the page cap, repeat-detection, and origin check of the item search
+    above: a server returning a ``next`` that points at the page just fetched
+    would otherwise spin forever, and one pointing off-origin is refused rather
+    than followed. Every one of those ends the walk by raising, because each
+    leaves the catalogue incomplete -- and an incomplete catalogue that returns
+    normally is indistinguishable from a complete one.
     """
     collections: list[Dict[str, Any]] = []
     seen: set[str] = set()
     url: Optional[str] = f"{server_url.rstrip('/')}/collections"
-    origin = urlsplit(url)[:2]
 
     for _ in range(_MAX_SEARCH_PAGES):
         if not url:
@@ -716,12 +718,42 @@ def _fetch_all_collections(server_url: str) -> list[Dict[str, Any]]:
             None,
         )
         if not next_href:
+            # Cleared before breaking so a surviving `url` below means exactly
+            # one thing: the page budget ran out with another page still to
+            # fetch. A clean finish must not look like a truncated one.
+            url = None
             break
-        # Resolved against the current page so a relative `next` works, and
-        # dropped if it leaves the configured server -- following that would be
-        # an open redirect out to another host.
+
+        # Resolved against the current page so a relative `next` works.
         candidate = urljoin(url, next_href)
-        url = candidate if urlsplit(candidate)[:2] == origin else None
+        parsed_candidate = urlsplit(candidate)
+        # Following an off-origin link would be an open redirect out to another
+        # host, so it is refused -- but refused loudly. Dropping it silently
+        # would end the walk exactly like a server that said it was finished,
+        # handing back a catalogue that looks complete while the collections
+        # past this point go missing. Same rule, and same reason, as the item
+        # search's pagination-link check.
+        if (
+            _url_origin(candidate) != _url_origin(server_url)
+            or parsed_candidate.username is not None
+            or parsed_candidate.password is not None
+        ):
+            raise ValueError(
+                "STAC server /collections pagination link must use the "
+                f"configured server origin {_url_origin(server_url)!r}: "
+                f"{candidate!r}"
+            )
+        url = candidate
+
+    # Reached only with a live `next` still in hand: the loop ran out of budget
+    # rather than out of pages. Returning here would hand back a catalogue that
+    # looks complete, and the collections missing from it would surface later as
+    # untitled or unknown datasets rather than as this failure.
+    if url:
+        raise ValueError(
+            f"STAC server /collections pagination exceeded {_MAX_SEARCH_PAGES} "
+            "pages; results truncated"
+        )
 
     return collections
 
