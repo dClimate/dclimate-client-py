@@ -677,7 +677,7 @@ wheels = [
 
 [[package]]
 name = "dclimate-client-py"
-version = "0.10.0"
+version = "0.11.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -753,7 +753,7 @@ provides-extras = ["testing", "dev", "examples"]
 
 [[package]]
 name = "dclimate-tabular-py"
-version = "0.2.1"
+version = "0.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "blake3" },
@@ -763,9 +763,9 @@ dependencies = [
     { name = "py-hamt" },
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/88/14/7ffdf05196e15aa22a9e7561a58171b6145501ef6bad8ddefa0ea303b453/dclimate_tabular_py-0.2.1.tar.gz", hash = "sha256:95f738b026e033a07eaae0588009a0b35857f17998d5bcdb082baa0ddf2207bf", size = 157341, upload-time = "2026-08-27T16:57:24.049Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/ca/9b0ee8aa5d9497982483946f4e3f9ffb19a64c8ec958036c1b8275ef1f3b/dclimate_tabular_py-0.3.0.tar.gz", hash = "sha256:2157cb55c3aa0f6986c8a9d3763e06f5cd68af83bb32ad2770ec547379b3cf9f", size = 159051, upload-time = "2026-08-31T18:03:43.669Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c0/89/9bf065ae8bc8f22303822a91e31ac80f12c8539f906c6c749b92a5ef9b3a/dclimate_tabular_py-0.2.1-py3-none-any.whl", hash = "sha256:31f6e189fc975d7d25ad83a8002a1cbadc70094b497f1a313b1c46cd10ff8aa4", size = 58022, upload-time = "2026-08-27T16:57:22.852Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/e6/de269e68cad00422a170883383fcac5276266a15119fa934d3a202d4bba0/dclimate_tabular_py-0.3.0-py3-none-any.whl", hash = "sha256:ef678bffff6a1ed7c5025721f4eacb6340d5110d6c99f358d24b261f433cebbe", size = 59360, upload-time = "2026-08-31T18:03:42.698Z" },
 ]
 
 [[package]]
