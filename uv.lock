@@ -677,7 +677,7 @@ wheels = [
 
 [[package]]
 name = "dclimate-client-py"
-version = "0.11.1"
+version = "0.11.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -722,7 +722,7 @@ testing = [
 requires-dist = [
     { name = "aiobotocore", specifier = ">=2.13.0" },
     { name = "aiohttp", specifier = ">=3.9.0" },
-    { name = "dclimate-tabular-py", specifier = ">=0.2.1" },
+    { name = "dclimate-tabular-py", specifier = ">=0.4.0" },
     { name = "geopandas", specifier = ">=1.0.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "multiformats", specifier = ">=0.3.1" },
@@ -753,7 +753,7 @@ provides-extras = ["testing", "dev", "examples"]
 
 [[package]]
 name = "dclimate-tabular-py"
-version = "0.3.0"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "blake3" },
@@ -763,9 +763,9 @@ dependencies = [
     { name = "py-hamt" },
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/ca/9b0ee8aa5d9497982483946f4e3f9ffb19a64c8ec958036c1b8275ef1f3b/dclimate_tabular_py-0.3.0.tar.gz", hash = "sha256:2157cb55c3aa0f6986c8a9d3763e06f5cd68af83bb32ad2770ec547379b3cf9f", size = 159051, upload-time = "2026-08-31T18:03:43.669Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/5b/cf62a9a8190e8544f1bdae49e2c361f5d50c96da073e6f163fc908df7e44/dclimate_tabular_py-0.4.0.tar.gz", hash = "sha256:02277951e6b84cd2cc9de55d0da132691caaee2c7e9a8198eadec6e950218abc", size = 162689, upload-time = "2026-09-23T18:34:28.646Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/e6/de269e68cad00422a170883383fcac5276266a15119fa934d3a202d4bba0/dclimate_tabular_py-0.3.0-py3-none-any.whl", hash = "sha256:ef678bffff6a1ed7c5025721f4eacb6340d5110d6c99f358d24b261f433cebbe", size = 59360, upload-time = "2026-08-31T18:03:42.698Z" },
+    { url = "https://files.pythonhosted.org/packages/53/1b/607964bf12d0da5dad4309a60457855e2425abf63adaff4a28472857ce4c/dclimate_tabular_py-0.4.0-py3-none-any.whl", hash = "sha256:74259dbb737ddf89b80327d24d4d368cacc89e64f097a109afcf88fe8108e06c", size = 60125, upload-time = "2026-09-23T18:34:27.643Z" },
 ]
 
 [[package]]

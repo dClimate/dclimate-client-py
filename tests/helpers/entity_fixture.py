@@ -1,4 +1,4 @@
-"""A tiny real `dclimate-tabular/1` dataset, built in memory.
+"""A tiny real `dclimate-tabular` dataset (the current `SPEC_VERSION`), built in memory.
 
 Mirrors ``dclimate-client-js`` ``tests/entities-columnkey.test.ts``, which builds
 its fixture with tabular's ``DatasetWriter``. ``tabular_py`` is deliberately
