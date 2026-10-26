@@ -10,7 +10,6 @@ from collections.abc import Mapping
 
 import pandas as pd
 import numpy as np
-from shapely.ops import unary_union
 import xarray as xr
 from xarray.core.variable import MissingDimensionsError
 
@@ -24,6 +23,8 @@ from . import dclimate_zarr_errors as errors
 
 # Users should not select more than this number of data points and coordinates
 DEFAULT_POINT_LIMIT = 40 * 40 * 50_000
+# Dimension names spatial_aggregation reduces over
+_SPATIAL_DIMS = frozenset({"latitude", "lat", "y", "longitude", "lon", "lng", "x"})
 BoundsSelection = typing.Union[typing.Sequence[float], Mapping[str, typing.Any]]
 GeoSelectionOptions = Mapping[str, typing.Any]
 
@@ -102,6 +103,11 @@ class GeotemporalData:
 
         return self.data.data_vars[self._data_var]
 
+    @property
+    def point_count(self) -> int:
+        """Number of coordinate combinations, independent of variable count."""
+        return functools.reduce(operator.mul, self.data.sizes.values(), 1)
+
     def check_dataset_size(self, point_limit: int = DEFAULT_POINT_LIMIT):
         """Checks how many data points are in a dataset
 
@@ -114,7 +120,7 @@ class GeotemporalData:
         SelectionTooLargeError
             When dataset size limit is violated
         """
-        num_points = functools.reduce(operator.mul, self.data.sizes.values(), 1)
+        num_points = self.point_count
         if num_points > point_limit:
             raise errors.SelectionTooLargeError(
                 f"Selection of {num_points} data points is more than limit of {point_limit}"
@@ -149,17 +155,34 @@ class GeotemporalData:
         GeotemporalData
             3D dataset with forecast hour added to time dimension
         """
-        # select only the requested date
-        data = self.data.sel(forecast_reference_time=forecast_reference_time)
-        # Set time to equal the forecast time, not the forecast reference time.
-        # Assumes only one forecast reference time is returned
-        data = data.assign_coords(
-            step=data.forecast_reference_time.values + data.step.values
-        )
-        # Remove forecast reference hour
-        data = data.squeeze().drop_vars("forecast_reference_time")
-        # Make forecasted data the time dimension
-        data = data.rename({"step": "time"})
+        if not {"forecast_reference_time", "step"}.issubset(self.data.coords):
+            raise errors.InvalidSelectionError("Forecasts are not available for this dataset")
+        try:
+            requested = pd.Timestamp(forecast_reference_time)
+            if requested.tzinfo is not None:
+                requested = requested.tz_convert("UTC").tz_localize(None)
+            requested = requested.to_datetime64()
+            indices = np.flatnonzero(self.data.forecast_reference_time.values == requested)
+            if len(indices) == 0:
+                raise ValueError("No exact forecast run")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise errors.InvalidSelectionError(
+                f"Forecast reference time {forecast_reference_time} is not in the dataset"
+            ) from exc
+        data = self.data.isel(forecast_reference_time=int(indices[0]), drop=True)
+        steps = data.step
+        if np.issubdtype(steps.dtype, np.timedelta64):
+            leads = steps.values
+        else:
+            units = str(steps.attrs.get("units", "hours")).lower()
+            unit_map = {"d": "D", "day": "D", "days": "D",
+                        "h": "h", "hour": "h", "hours": "h",
+                        "m": "m", "min": "m", "minute": "m", "minutes": "m",
+                        "s": "s", "second": "s", "seconds": "s"}
+            if units not in unit_map:
+                raise errors.InvalidSelectionError(f"Unsupported forecast step units: {units}")
+            leads = pd.to_timedelta(steps.values, unit=unit_map[units]).to_numpy()
+        data = data.assign_coords(step=requested + leads).rename({"step": "time"})
         return self._new(data)
 
     def reindex_forecast(self) -> "GeotemporalData":
@@ -393,9 +416,21 @@ class GeotemporalData:
         epsg_crs: int = 4326,
         point_limit=DEFAULT_POINT_LIMIT,
     ) -> "GeotemporalData":
-        """Reduces dataset to points within arbitrary shape.
+        """Reduces dataset to the grid cells whose centres fall inside a shape.
 
-        Requires rioxarray to be installed
+        Cells in the shape's bounding box but outside the shape are set to NaN,
+        and rows and columns with no cell inside are dropped. Pair with
+        ``spatial_aggregation`` to get one value per timestep for the area.
+
+        A shape too small to contain any cell centre falls back to the single
+        cell nearest a point inside it (see ``reduce_polygon_to_point``).
+
+        The result's attrs record what was selected, counted in grid cells
+        rather than data points:
+
+        - ``polygon_cells_inside``: cells whose centre lies inside the shape
+        - ``polygon_cells_in_bounds``: cells in the shape's bounding box
+        - ``polygon_fallback``: ``"nearest_cell"``, set only for the fallback
 
         Parameters
         ----------
@@ -404,57 +439,79 @@ class GeotemporalData:
         epsg_crs: int
           EPSG code for polygons_mask (see
             https://en.wikipedia.org/wiki/EPSG_Geodetic_Parameter_Dataset)
+        point_limit: int
+            Limit on the number of data points in the shape's bounding box.
 
         Returns
         -------
         GeotemporalData
             New dataset
         """
-        try:
-            import rioxarray
-        except ImportError as exc:
-            raise ImportError(
-                "GeotemporalData.polygons() requires rioxarray to be installed"
-            ) from exc
-
         import geopandas as gpd
+        import shapely
 
-        # Normalize the mask before comparing areas or selecting a fallback
-        # point. Dataset coordinates are WGS84; using projected coordinates
-        # here would otherwise compare square metres with square degrees and
-        # pass metre-valued centroids to latitude/longitude selection.
+        # Normalize the mask before testing cells or selecting a fallback
+        # point. Dataset coordinates are WGS84; projected coordinates would
+        # otherwise pass metre-valued positions to latitude/longitude tests.
         mask = gpd.GeoSeries(polygons_mask, crs=epsg_crs).to_crs(4326)
+        if mask.empty or mask.is_empty.any() or mask.isna().any():
+            raise errors.InvalidSelectionError("Polygon input must contain nonempty polygons")
+        for geometry in mask:
+            parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+            for part in parts:
+                if part.geom_type != "Polygon" or not part.is_valid:
+                    raise errors.InvalidSelectionError("Polygon input must contain valid polygons")
+                for ring in [part.exterior, *part.interiors]:
+                    coordinates = np.asarray(ring.coords)
+                    if (np.abs(np.diff(coordinates[:, 0])) > 180).any():
+                        raise errors.InvalidSelectionError("Polygon crosses the antimeridian; split it first")
         normalized_polygons = mask.array
 
-        # If the polygon(s) are collectively smaller than the size of one grid cell,
-        # clipping will return no data In this case return data from the grid cell nearest
-        # to the center of the polygon
-        if (
-            self.data.attrs["spatial resolution"] ** 2
-            > normalized_polygons.union_all().area
-        ):
-            return self.reduce_polygon_to_point(normalized_polygons)
-
-        # return clipped data as normal if the polygons are large enough
-        spatial_data = self.data.rio.set_spatial_dims(
-            x_dim="longitude", y_dim="latitude", inplace=False
-        )
-        spatial_data = spatial_data.rio.write_crs("epsg:4326")
         min_lon, min_lat, max_lon, max_lat = mask.total_bounds
-        box_ds = (
-            self._new(spatial_data).rectangle(min_lat, min_lon, max_lat, max_lon).data
+        box_ds = self.rectangle(min_lat, min_lon, max_lat, max_lon).data
+        lon_grid, lat_grid = np.meshgrid(
+            box_ds["longitude"].values, box_ds["latitude"].values
         )
+        inside = xr.DataArray(
+            shapely.contains_xy(mask.union_all(), lon_grid, lat_grid),
+            dims=("latitude", "longitude"),
+            coords={
+                "latitude": box_ds["latitude"],
+                "longitude": box_ds["longitude"],
+            },
+        )
+        cells_in_bounds = int(inside.size)
+        cells_inside = int(inside.sum())
+
+        # A shape smaller than one grid cell often contains no cell centre at
+        # all. Return the nearest cell rather than no data.
+        if cells_inside == 0:
+            point = self.reduce_polygon_to_point(normalized_polygons).data
+            return self._new(
+                point.assign_attrs(
+                    polygon_cells_inside=0,
+                    polygon_cells_in_bounds=cells_in_bounds,
+                    polygon_fallback="nearest_cell",
+                )
+            )
+
         self._new(box_ds).check_dataset_size(point_limit=point_limit)
-        try:
-            shaped_ds = box_ds.rio.clip(mask, 4326, drop=True)
-        except rioxarray.exceptions.NoDataInBounds:
-            return self.reduce_polygon_to_point(normalized_polygons)
+        rows = inside.any("longitude").values
+        columns = inside.any("latitude").values
+        box_ds = box_ds.isel(latitude=rows, longitude=columns)
+        inside = inside.isel(latitude=rows, longitude=columns)
 
-        data_var = list(shaped_ds.data_vars)[0]
-        if "grid_mapping" in shaped_ds[data_var].attrs:
-            del shaped_ds[data_var].attrs["grid_mapping"]
-
-        return self._new(shaped_ds)
+        shaped_ds = box_ds.copy()
+        shaped_ds.attrs = {k: v for k, v in shaped_ds.attrs.items() if k != "polygon_fallback"}
+        for name, variable in box_ds.data_vars.items():
+            if "latitude" in variable.dims and "longitude" in variable.dims:
+                shaped_ds[name] = variable.where(inside)
+        return self._new(
+            shaped_ds.assign_attrs(
+                polygon_cells_inside=cells_inside,
+                polygon_cells_in_bounds=cells_in_bounds,
+            )
+        )
 
     def time_range(
         self, start_time: datetime.datetime, end_time: datetime.datetime
@@ -545,18 +602,42 @@ class GeotemporalData:
         GeotemporalData
             A new dataset
         """
-        pt = unary_union(polygons_mask).representative_point()
-        data = self.data.sel(latitude=pt.y, longitude=pt.x, method="nearest")
+        # Use the same widest interior scan-line segment as the JS helper.
+        best_width = -1.0
+        point = None
+        for geometry in polygons_mask:
+            parts = list(geometry.geoms) if geometry.geom_type == "MultiPolygon" else [geometry]
+            for polygon in parts:
+                _, south, _, north = polygon.bounds
+                latitude = (south + north) / 2
+                crossings = []
+                for ring in [polygon.exterior, *polygon.interiors]:
+                    positions = list(ring.coords)
+                    for (xi, yi), (xj, yj) in zip(positions, positions[1:]):
+                        if (yi > latitude) != (yj > latitude):
+                            crossings.append(xi + (latitude - yi) * (xj - xi) / (yj - yi))
+                crossings.sort()
+                for index in range(0, len(crossings) - 1, 2):
+                    width = crossings[index + 1] - crossings[index]
+                    if width > best_width:
+                        best_width = width
+                        point = ((crossings[index] + crossings[index + 1]) / 2, latitude)
+        if point is None:
+            raise errors.InvalidSelectionError("Polygon has no interior point")
+        longitude, latitude = point
+        data = self.data.sel(latitude=latitude, longitude=longitude, method="nearest")
         return self._new(data)
 
     def spatial_aggregation(
         self,
         agg_method: str,
+        variables: typing.Optional[list[str]] = None,
     ) -> "GeotemporalData":
         """Reduces data using spatial aggregation
 
-        Reduces data for all points for every time period according to the specified
-        aggregation method.
+        Reduces the latitude/longitude grid for every time period according to the
+        specified aggregation method. Other dimensions, such as ensemble members,
+        are kept. NaN cells, including those ``polygons`` excluded, are skipped.
 
         For a more nuanced treatment of spatial units use the `get_points_in_polygons`
         method.
@@ -572,10 +653,28 @@ class GeotemporalData:
             A new dataset
         """
         _check_input_parameters(agg_method=agg_method)
-        spatial_dims = [dim for dim in self.data.dims if dim != "time"]
+        # Only the grid collapses. Time, ensemble members and levels keep
+        # their own values, as in the JavaScript client.
+        spatial_dims = [
+            dim for dim in self.data.dims if str(dim).lower() in _SPATIAL_DIMS
+        ]
         # Aggregate by the specified method across all time periods
         aggregator = getattr(xr.Dataset, agg_method)
-        return self._new(aggregator(self.data, spatial_dims, keep_attrs=True))
+        targets = list(self.data.data_vars) if variables is None else variables
+        unknown = set(targets) - set(self.data.data_vars)
+        if unknown:
+            raise errors.InvalidSelectionError(f"Unknown variables: {sorted(unknown)}")
+        result = self.data.copy()
+        for name in targets:
+            variable = self.data[name]
+            dims = [dim for dim in variable.dims if dim in spatial_dims]
+            if dims:
+                finite = variable.where(np.isfinite(variable))
+                reduced = getattr(finite, agg_method)(dim=dims, skipna=True, keep_attrs=True)
+                result[name] = reduced.where(finite.count(dim=dims) > 0)
+        # Rebuild so reduced spatial coordinates do not remain as unused dimensions.
+        return self._new(xr.Dataset({name: result[name] for name in result.data_vars},
+                                    attrs=self.data.attrs))
 
     def temporal_aggregation(
         self,

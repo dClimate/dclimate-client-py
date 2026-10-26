@@ -1,3 +1,4 @@
+import sys
 import subprocess
 import textwrap
 from pathlib import Path
@@ -25,18 +26,6 @@ def _polygon_dataset():
 
 def _polygon_mask():
     return gpd.GeoSeries([box(-0.4, -0.4, 1.4, 1.4)], crs=4326).array
-
-
-def _force_clip_no_data(monkeypatch):
-    import rioxarray  # noqa: F401 -- registers the xarray ``rio`` accessor
-    from rioxarray.exceptions import NoDataInBounds
-    from rioxarray.raster_dataset import RasterDataset
-
-    def raise_no_data_in_bounds(self, *args, **kwargs):
-        raise NoDataInBounds("polygon contains no grid-cell centers")
-
-    monkeypatch.setattr(RasterDataset, "clip", raise_no_data_in_bounds)
-    return NoDataInBounds
 
 
 def test_polygons_registers_rioxarray_accessor_in_fresh_interpreter():
@@ -73,7 +62,7 @@ def test_polygons_registers_rioxarray_accessor_in_fresh_interpreter():
     repo_root = Path(__file__).resolve().parents[1]
 
     completed = subprocess.run(
-        ["uv", "run", "python", "-c", script],
+        [sys.executable, "-c", script],
         cwd=repo_root,
         capture_output=True,
         text=True,
@@ -81,17 +70,6 @@ def test_polygons_registers_rioxarray_accessor_in_fresh_interpreter():
     )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
-
-
-def test_polygons_handles_rioxarray_no_data_in_bounds(monkeypatch):
-    _force_clip_no_data(monkeypatch)
-    geotemporal = GeotemporalData(_polygon_dataset(), "the-dataset-name")
-    mask = _polygon_mask()
-    expected = geotemporal.reduce_polygon_to_point(mask)
-
-    result = geotemporal.polygons(mask)
-
-    xr.testing.assert_identical(result.data, expected.data)
 
 
 def test_polygons_does_not_mutate_caller_dataset():

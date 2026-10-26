@@ -227,6 +227,38 @@ Callers loading a direct CID have no STAC resolution mapping and must pass
 generator's `metadataGroup` is internal catalog-generation configuration and
 does not influence client selection.
 
+## Polygon selection and area statistics
+
+`polygons()` keeps the grid cells whose centres fall inside a shape and sets
+the rest of its bounding box to NaN. `spatial_aggregation()` then reduces the
+grid to one value per timestep, skipping those NaN cells:
+
+```python
+import geopandas as gpd
+
+fields = gpd.read_file("fields.geojson")  # or .kml, .shp, ...
+july = dataset.time_range(datetime(2024, 7, 1), datetime(2024, 7, 31, 23))
+field = july.polygons(fields.geometry.values, epsg_crs=fields.crs.to_epsg())
+area_mean = field.spatial_aggregation("mean")  # min, max, median, mean, std, sum
+
+field.data.attrs["polygon_cells_inside"]     # grid cells whose centre is inside
+field.data.attrs["polygon_cells_in_bounds"]  # grid cells in the bounding box
+```
+
+- **Apply `time_range` first.** The bounding box is checked against
+  `point_limit` (default `DEFAULT_POINT_LIMIT`, 80 million data points) and
+  `SelectionTooLargeError` is raised above it.
+- **Small polygons fall back to one cell.** A polygon that contains no cell
+  centre (a field smaller than an ERA5 cell, say) returns the cell nearest a
+  point inside it, without latitude/longitude dims, and sets
+  `polygon_fallback = "nearest_cell"`. That value comes from a cell larger than
+  the polygon.
+- `spatial_aggregation()` reduces only latitude and longitude, so ensemble
+  members and levels keep their own series.
+
+The JavaScript client's `polygons()` and `spatialAggregation()` select and
+reduce the same cells and set the same attributes.
+
 ## Entity data usage
 
 Gridded Zarr datasets come from `load_dataset`. Point-observation **entity**
@@ -431,7 +463,8 @@ Various exceptions to be raised for bad or invalid user input.
 
 `GeotemporalData`, a wrapper around `xarray` datasets. Contains polygon, rectangle, circle and
 point spatial subsetting options, as well as temporal subsetting. Also allows for both spatial
-and temporal aggregations.
+and temporal aggregations. Polygon selection masks by cell centre with shapely; it no longer
+uses `rio.clip` or the dataset's `spatial resolution` attribute.
 
 ---
 
@@ -450,3 +483,27 @@ Uses a custom `IPFSStacIO` implementation to transparently resolve `ipfs://` URI
 ### ipfs_retrieval.py
 
 Functions for loading Zarr datasets from IPFS using `py-hamt`. Handles interaction with IPFS gateways and RPC endpoints through the KuboCAS interface.
+
+
+## Data operation parity (0.12.0)
+
+The JavaScript and Python clients share these rules:
+
+| Operation | JavaScript | Python | Shared behavior |
+| --- | --- | --- | --- |
+| Polygon selection | `polygons()` | `polygons()` | Cell centres strictly inside; outer and hole boundaries excluded; counts are grid cells, independent of time or variables. Antimeridian-crossing rings are rejected. |
+| Spatial aggregation | `spatialAggregation()` | `spatial_aggregation()` | Reduce spatial axes only; preserve time, members, and levels. Scalar variables are retained. Nonfinite cells are skipped; all-missing reductions return missing, including sum. Optional variable lists limit reduction. |
+| Forecast run | `forecast()` | `forecast()` | Exact UTC instant; valid time equals run plus lead; preserve unrelated singleton dimensions. Missing runs raise `InvalidSelectionError`. |
+| Hourly padding | `reindexForecast()` | `reindex_forecast()` | Explicitly fill missing hours between the first and last valid time. This materializes JS data; forecast selection itself stays lazy. |
+| Size | `pointCount`, `checkDatasetSize()` | `point_count`, `check_dataset_size()` | Product of dimension sizes; independent of number of variables. |
+
+GeoJSON and KML loading use JS parsing helpers and GeoPandas in Python; matching
+method names are not required for these ecosystem-specific input tools. Missing
+masked values are `null`/`NaN` in JS and `NaN` in Python. Small polygons without
+an inside cell centre use a representative interior point to choose a nearest
+cell and record `polygon_fallback="nearest_cell"`.
+
+Python spatial aggregation previously collapsed members and levels as well as
+latitude/longitude. Version 0.12.0 preserves those dimensions; callers who want
+them reduced must do that explicitly. Python `forecast()` no longer interprets
+a date-only string as a whole-day selection; it means midnight UTC, as in JS.
